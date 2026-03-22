@@ -1,0 +1,45 @@
+{
+  "name": "@dayofweek/dcli",
+  "version": "1.0.0",
+  "description": "CLI for the Day of Week AgTech platform — read data and submit proposals for review",
+  "license": "MIT",
+  "type": "module",
+  "bin": {
+    "dcli": "dist/bin/dcli.js"
+  },
+  "files": [
+    "dist/"
+  ],
+  "engines": {
+    "node": ">=18"
+  },
+  "scripts": {
+    "build": "tsc",
+    "dev": "tsx src/bin/dcli.ts",
+    "prepublishOnly": "npm run build"
+  },
+  "dependencies": {
+    "commander": "^14.0.0",
+    "open": "^11.0.0"
+  },
+  "devDependencies": {
+    "tsx": "^4.21.0",
+    "typescript": "^5.9.0",
+    "@types/node": "^22.0.0"
+  },
+  "publishConfig": {
+    "access": "public"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/dayofweek/dcli.git"
+  },
+  "homepage": "https://github.com/dayofweek/dcli#readme",
+  "keywords": [
+    "dayofweek",
+    "agtech",
+    "cli",
+    "agent",
+    "food-supply-chain"
+  ]
+}
