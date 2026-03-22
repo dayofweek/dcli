@@ -1,6 +1,6 @@
 {
   "name": "@dayofweek/dcli",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "description": "CLI for the Day of Week AgTech platform — read data and submit proposals for review",
   "license": "MIT",
   "type": "module",
@@ -32,7 +32,7 @@
   },
   "repository": {
     "type": "git",
-    "url": "https://github.com/dayofweek/dcli.git"
+    "url": "git+https://github.com/dayofweek/dcli.git"
   },
   "homepage": "https://github.com/dayofweek/dcli#readme",
   "keywords": [
