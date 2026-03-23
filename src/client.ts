@@ -105,10 +105,7 @@ export class DayOfWeekClient {
   // ── Schema ────────────────────────────────────────────────────────────────
 
   async getSchema(): Promise<any> {
-    // Schema endpoint doesn't require auth
-    const res = await fetch(`${this.baseUrl}/schema`)
-    if (!res.ok) throw new ApiError(res.status, await res.text())
-    return res.json()
+    return this.get("/schema")
   }
 
   // ── HTTP helpers ──────────────────────────────────────────────────────────
