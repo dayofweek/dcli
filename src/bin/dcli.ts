@@ -162,6 +162,7 @@ agent
   .option("--confidence <score>", "Confidence 0-1", parseFloat)
   .option("--parent <entityId>", "Parent entity ID")
   .option("--entity-type <type>", "Entity type (Farm, Producer, ...)")
+  .option("--target-id <id>", "Target record ID (for update/delete)")
   .option("--file <path>", "Read payload from JSON file (- for stdin)")
   .option("--payload <json>", "Inline JSON payload")
   .action(async (opts) => {
@@ -180,6 +181,7 @@ agent
       title: opts.title,
       description: opts.description,
       payload,
+      targetId: opts.targetId,
       sourceAgent: opts.source,
       sourceUrl: opts.sourceUrl,
       confidence: opts.confidence,
