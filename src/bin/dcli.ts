@@ -181,7 +181,7 @@ agent
       title: opts.title,
       description: opts.description,
       payload,
-      targetId: opts.targetId,
+      targetRecordId: opts.targetId,
       sourceAgent: opts.source,
       sourceUrl: opts.sourceUrl,
       confidence: opts.confidence,
