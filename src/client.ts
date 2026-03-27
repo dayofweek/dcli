@@ -73,6 +73,20 @@ export class DayOfWeekClient {
     return this.get(`/contacts${qs ? `?${qs}` : ""}`)
   }
 
+  async listEntityTypes(): Promise<any[]> {
+    return this.get("/entity-types")
+  }
+
+  async searchCatalog(opts?: { search?: string; parent?: string; type?: string; limit?: number }): Promise<any[]> {
+    const params = new URLSearchParams()
+    if (opts?.search) params.set("search", opts.search)
+    if (opts?.parent) params.set("parent", opts.parent)
+    if (opts?.type) params.set("type", opts.type)
+    if (opts?.limit) params.set("limit", String(opts.limit))
+    const qs = params.toString()
+    return this.get(`/catalog${qs ? `?${qs}` : ""}`)
+  }
+
   // ── Proposals ─────────────────────────────────────────────────────────────
 
   async listProposals(opts?: { status?: string; source?: string; limit?: number }): Promise<any[]> {

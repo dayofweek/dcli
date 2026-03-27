@@ -146,6 +146,28 @@ read
     output(result)
   })
 
+read
+  .command("entity-types")
+  .description("List available entity types")
+  .action(async () => {
+    const client = getClient()
+    const result = await client.listEntityTypes()
+    output(result)
+  })
+
+read
+  .command("catalog")
+  .description("Search or browse the produce catalog")
+  .option("--search <query>", "Search by name")
+  .option("--parent <conceptId>", "List children of a category")
+  .option("--type <nodeType>", "Filter by type (category, produce, variety)")
+  .option("--limit <count>", "Max results", parseInt)
+  .action(async (opts) => {
+    const client = getClient()
+    const result = await client.searchCatalog(opts)
+    output(result)
+  })
+
 // ── Agent Commands ───────────────────────────────────────────────────────────
 
 const agent = program.command("agent").description("Submit and view proposals")
