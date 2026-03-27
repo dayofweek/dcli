@@ -7,11 +7,15 @@ import { readFileSync, existsSync, mkdirSync, writeFileSync } from "node:fs"
 import { join, dirname } from "node:path"
 import { homedir } from "node:os"
 import { createInterface } from "node:readline/promises"
+import { fileURLToPath } from "node:url"
+
+const __dirname = dirname(fileURLToPath(import.meta.url))
+const pkg = JSON.parse(readFileSync(join(__dirname, "../../package.json"), "utf-8"))
 
 const program = new Command()
   .name("dcli")
   .description("CLI for the Day of Week AgTech platform")
-  .version("1.0.0")
+  .version(pkg.version)
   .option("--token <token>", "Auth token (overrides DCLI_AUTH_TOKEN)")
   .option("--api-url <url>", "API base URL (overrides DCLI_API_URL)")
   .option("--json", "Output JSON (default for non-interactive use)")
@@ -157,10 +161,11 @@ read
 
 read
   .command("catalog")
-  .description("Search or browse the produce catalog")
+  .description("Search or browse the produce catalog (selectable items only by default)")
   .option("--search <query>", "Search by name")
   .option("--parent <conceptId>", "List children of a category")
   .option("--type <nodeType>", "Filter by type (category, produce, variety)")
+  .option("--include-categories", "Include non-selectable categories in results")
   .option("--limit <count>", "Max results", parseInt)
   .action(async (opts) => {
     const client = getClient()

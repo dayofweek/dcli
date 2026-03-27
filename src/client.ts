@@ -77,11 +77,12 @@ export class DayOfWeekClient {
     return this.get("/entity-types")
   }
 
-  async searchCatalog(opts?: { search?: string; parent?: string; type?: string; limit?: number }): Promise<any[]> {
+  async searchCatalog(opts?: { search?: string; parent?: string; type?: string; includeCategories?: boolean; limit?: number }): Promise<any[]> {
     const params = new URLSearchParams()
     if (opts?.search) params.set("search", opts.search)
     if (opts?.parent) params.set("parent", opts.parent)
     if (opts?.type) params.set("type", opts.type)
+    if (opts?.includeCategories) params.set("includeCategories", "true")
     if (opts?.limit) params.set("limit", String(opts.limit))
     const qs = params.toString()
     return this.get(`/catalog${qs ? `?${qs}` : ""}`)
