@@ -264,67 +264,110 @@ agent
 
 const skill = program.command("skill").description("Manage the Day of Week agent skill")
 
+type SkillTarget = "agents" | "claude" | "all"
+
+function resolveTargetDirs(target: SkillTarget, bundleName: string, customDir?: string): string[] {
+  if (customDir) return [customDir]
+  const agentsDir = join(homedir(), ".agents", "skills", bundleName)
+  const claudeDir = join(homedir(), ".claude", "skills", bundleName)
+  const claudeRootExists = existsSync(join(homedir(), ".claude"))
+  switch (target) {
+    case "agents":
+      return [agentsDir]
+    case "claude":
+      return [claudeDir]
+    case "all":
+      return claudeRootExists ? [agentsDir, claudeDir] : [agentsDir]
+  }
+}
+
+function writeBundle(bundle: { files: Array<{ path: string; content: string }> }, targetDir: string): number {
+  let filesWritten = 0
+  for (const file of bundle.files) {
+    const filePath = join(targetDir, file.path)
+    mkdirSync(dirname(filePath), { recursive: true })
+    writeFileSync(filePath, file.content, "utf-8")
+    filesWritten++
+  }
+  return filesWritten
+}
+
+function parseTarget(value: string | undefined): SkillTarget {
+  const v = (value ?? "all").toLowerCase()
+  if (v !== "agents" && v !== "claude" && v !== "all") {
+    console.error(`Invalid --target: ${value}. Use agents, claude, or all.`)
+    process.exit(1)
+  }
+  return v
+}
+
 skill
   .command("install")
   .description("Install the agent skill (requires valid auth)")
-  .option("--dir <path>", "Custom install directory")
+  .option("--dir <path>", "Custom install directory (overrides --target)")
+  .option("--target <target>", "Install target: agents, claude, or all (default: all)")
   .action(async (opts) => {
     const client = getClient()
     const bundle = await client.getSkillBundle()
+    const target = parseTarget(opts.target)
+    const dirs = resolveTargetDirs(target, bundle.name, opts.dir)
 
-    const targetDir = opts.dir ?? join(homedir(), ".agents", "skills", bundle.name)
-    let filesWritten = 0
-
-    for (const file of bundle.files) {
-      const filePath = join(targetDir, file.path)
-      mkdirSync(dirname(filePath), { recursive: true })
-      writeFileSync(filePath, file.content, "utf-8")
-      filesWritten++
+    for (const dir of dirs) {
+      const count = writeBundle(bundle, dir)
+      console.log(`Installed ${count} files to ${dir}`)
     }
-
-    console.log(`Installed ${filesWritten} files to ${targetDir}`)
     console.log("Any compatible agent will discover the skill automatically.")
   })
 
 skill
   .command("update")
   .description("Update the skill to the latest version")
-  .option("--dir <path>", "Custom install directory")
+  .option("--dir <path>", "Custom install directory (overrides --target)")
+  .option("--target <target>", "Install target: agents, claude, or all (default: all)")
   .action(async (opts) => {
-    // Same as install — overwrites
     const client = getClient()
     const bundle = await client.getSkillBundle()
+    const target = parseTarget(opts.target)
+    const dirs = resolveTargetDirs(target, bundle.name, opts.dir)
 
-    const targetDir = opts.dir ?? join(homedir(), ".agents", "skills", bundle.name)
-    let filesWritten = 0
-
-    for (const file of bundle.files) {
-      const filePath = join(targetDir, file.path)
-      mkdirSync(dirname(filePath), { recursive: true })
-      writeFileSync(filePath, file.content, "utf-8")
-      filesWritten++
+    for (const dir of dirs) {
+      const count = writeBundle(bundle, dir)
+      console.log(`Updated ${count} files in ${dir}`)
     }
-
-    console.log(`Updated ${filesWritten} files in ${targetDir}`)
   })
 
 skill
   .command("status")
   .description("Check if the skill is installed")
-  .option("--dir <path>", "Custom install directory")
+  .option("--dir <path>", "Custom install directory (overrides --target)")
+  .option("--target <target>", "Check target: agents, claude, or all (default: all)")
   .action(async (opts) => {
-    const dir = opts.dir ?? join(homedir(), ".agents", "skills", "dayofweek-platform")
-    const skillPath = join(dir, "SKILL.md")
+    const bundleName = "dayofweek-platform"
+    const target = parseTarget(opts.target)
+    const dirs = opts.dir
+      ? [opts.dir]
+      : target === "all"
+        ? [join(homedir(), ".agents", "skills", bundleName), join(homedir(), ".claude", "skills", bundleName)]
+        : resolveTargetDirs(target, bundleName)
 
-    if (!existsSync(skillPath)) {
-      console.log("Not installed. Run: dcli skill install")
-      process.exit(1)
+    let anyInstalled = false
+    for (const dir of dirs) {
+      const skillPath = join(dir, "SKILL.md")
+      if (!existsSync(skillPath)) {
+        console.log(`Not installed at: ${dir}`)
+        continue
+      }
+      anyInstalled = true
+      const content = readFileSync(skillPath, "utf-8")
+      const versionMatch = content.match(/version:\s*"([^"]+)"/)
+      console.log(`Installed at: ${dir}`)
+      console.log(`  Version: ${versionMatch?.[1] ?? "unknown"}`)
     }
 
-    const content = readFileSync(skillPath, "utf-8")
-    const versionMatch = content.match(/version:\s*"([^"]+)"/)
-    console.log(`Installed at: ${dir}`)
-    console.log(`Version: ${versionMatch?.[1] ?? "unknown"}`)
+    if (!anyInstalled) {
+      console.log("\nRun: dcli skill install")
+      process.exit(1)
+    }
     console.log("\nTo update: dcli skill update")
   })
 
