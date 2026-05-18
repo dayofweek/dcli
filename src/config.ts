@@ -5,6 +5,15 @@ import { homedir } from "node:os"
 export interface DcliConfig {
   authToken?: string
   apiUrl?: string
+  /**
+   * Cached admin status from the last `dcli auth status` call. Used to
+   * decide locally whether to expose admin-only subcommands in `--help`.
+   * Refreshed automatically when `dcli auth status` or `dcli auth login`
+   * runs; admin commands are hidden when this is unset or false.
+   */
+  isAdmin?: boolean
+  /** Unix-ms timestamp of the last isAdmin refresh. */
+  roleCachedAt?: number
 }
 
 const CONFIG_DIR = join(homedir(), ".config", "dayofweek")

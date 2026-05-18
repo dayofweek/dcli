@@ -67,6 +67,13 @@ auth
     try {
       const client = getClient()
       const result = await client.checkAuth()
+      // Persist isAdmin so the next CLI invocation can register admin
+      // subcommands in --help without a network round-trip. Stale cache
+      // is harmless: admin commands still reject non-admin tokens at the
+      // API boundary, and admin demotion is rare.
+      if (result.authenticated && typeof result.isAdmin === "boolean") {
+        saveConfig({ isAdmin: result.isAdmin, roleCachedAt: Date.now() })
+      }
       output(result)
     } catch (err: any) {
       console.error(`Auth check failed: ${err.message}`)
@@ -370,6 +377,64 @@ skill
     }
     console.log("\nTo update: dcli skill update")
   })
+
+// ── Admin Commands ───────────────────────────────────────────────────────────
+//
+// These are admin-only. They're registered as hidden subcommands when the
+// cached role from the last `dcli auth status` says the caller is admin —
+// otherwise they're not advertised in --help at all and customers never
+// learn the commands exist. The endpoints themselves enforce admin auth
+// independently, so stale or absent cache can't grant access.
+//
+// New admin agents should run `dcli auth status` once after install to
+// populate the cache; the admin skill bundle (ADMIN_MD) documents this.
+
+function registerAdminCommands() {
+  const cfg = loadConfig()
+  if (!cfg.isAdmin) return
+
+  const admin = program
+    .command("admin", { hidden: true })
+    .description("Admin-only cross-org operations (DoW staff)")
+
+  admin
+    .command("entities")
+    .description("List entities across all orgs with admin filters")
+    .option("--type <entityType>", "Filter by entity type")
+    .option("--missing-location", "Only entities lacking metadata.places[].lat/lng")
+    .option("--search <query>", "Substring match on name")
+    .option("--org <slug>", "Restrict to a single org slug or ID")
+    .option("--limit <count>", "Max results (default 200)", parseInt)
+    .action(async (opts) => {
+      const client = getClient()
+      const result = await client.adminListEntities({
+        org: opts.org,
+        type: opts.type,
+        missingLocation: opts.missingLocation,
+        search: opts.search,
+        limit: opts.limit,
+      })
+      output(result)
+    })
+
+  admin
+    .command("proposals")
+    .description("List agent proposals across all orgs")
+    .option("--status <status>", "Filter: pending, approved, rejected, failed")
+    .option("--source-agent <name>", "Filter by sourceAgent identifier")
+    .option("--limit <count>", "Max results (default 100)", parseInt)
+    .action(async (opts) => {
+      const client = getClient()
+      const result = await client.adminListProposals({
+        status: opts.status,
+        sourceAgent: opts.sourceAgent,
+        limit: opts.limit,
+      })
+      output(result)
+    })
+}
+
+registerAdminCommands()
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
 

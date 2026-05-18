@@ -26,7 +26,7 @@ export class DayOfWeekClient {
 
   // ── Auth ──────────────────────────────────────────────────────────────────
 
-  async checkAuth(): Promise<{ status: string; authenticated: boolean }> {
+  async checkAuth(): Promise<{ status: string; authenticated: boolean; isAdmin?: boolean }> {
     return this.get("/auth/status")
   }
 
@@ -109,6 +109,39 @@ export class DayOfWeekClient {
 
   async submitBatch(batch: { batchLabel: string; sourceAgent?: string; proposals: any[] }): Promise<any> {
     return this.post("/proposals/batch", batch)
+  }
+
+  // ── Admin (cross-org) ─────────────────────────────────────────────────────
+  // These endpoints reject non-admin tokens with 401 "Admin access required".
+
+  async adminListEntities(opts?: {
+    org?: string
+    type?: string
+    missingLocation?: boolean
+    search?: string
+    limit?: number
+  }): Promise<{ results: any[]; truncated: boolean; total: number }> {
+    const params = new URLSearchParams()
+    if (opts?.org) params.set("org", opts.org)
+    if (opts?.type) params.set("type", opts.type)
+    if (opts?.missingLocation) params.set("missing-location", "1")
+    if (opts?.search) params.set("search", opts.search)
+    if (opts?.limit) params.set("limit", String(opts.limit))
+    const qs = params.toString()
+    return this.get(`/admin/entities${qs ? `?${qs}` : ""}`)
+  }
+
+  async adminListProposals(opts?: {
+    status?: string
+    sourceAgent?: string
+    limit?: number
+  }): Promise<{ results: any[]; truncated: boolean; total: number }> {
+    const params = new URLSearchParams()
+    if (opts?.status) params.set("status", opts.status)
+    if (opts?.sourceAgent) params.set("source-agent", opts.sourceAgent)
+    if (opts?.limit) params.set("limit", String(opts.limit))
+    const qs = params.toString()
+    return this.get(`/admin/proposals${qs ? `?${qs}` : ""}`)
   }
 
   // ── Skill ─────────────────────────────────────────────────────────────────
