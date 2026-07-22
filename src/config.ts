@@ -1,6 +1,7 @@
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs"
 import { join } from "node:path"
 import { homedir } from "node:os"
+import { defaultCredentialStore, type CredentialStore } from "./credentials.js"
 
 export interface DcliConfig {
   authToken?: string
@@ -31,25 +32,43 @@ export function loadConfig(): DcliConfig {
 }
 
 export function saveConfig(updates: Partial<DcliConfig>): void {
-  mkdirSync(CONFIG_DIR, { recursive: true })
+  mkdirSync(CONFIG_DIR, { recursive: true, mode: 0o700 })
   const existing = loadConfig()
   const merged = { ...existing, ...updates }
-  writeFileSync(CONFIG_FILE, JSON.stringify(merged, null, 2), "utf-8")
+  writeFileSync(CONFIG_FILE, JSON.stringify(merged, null, 2), { encoding: "utf-8", mode: 0o600 })
 }
 
-export function getToken(): string {
+export function getToken(store: CredentialStore = defaultCredentialStore()): string {
+  const config = loadConfig()
+  const storedToken = store.get()
   const token =
     process.env.DCLI_AUTH_TOKEN ??
     process.env.DCLI_TOKEN ??
-    loadConfig().authToken
+    storedToken ??
+    config.authToken
+
+  // One-way migration of the old plaintext config. The legacy key is removed
+  // immediately after the protected store accepts it.
+  if (!storedToken && config.authToken && token === config.authToken) {
+    store.set(config.authToken)
+    saveConfig({ authToken: undefined })
+  }
 
   if (!token) {
-    console.error("No auth token found.")
-    console.error("Set DCLI_AUTH_TOKEN or run: dcli auth login")
-    process.exit(1)
+    throw new Error("No credential found. Run: dcli auth login")
   }
 
   return token
+}
+
+export function saveCredential(secret: string, store: CredentialStore = defaultCredentialStore()): void {
+  store.set(secret)
+  if (loadConfig().authToken) saveConfig({ authToken: undefined })
+}
+
+export function deleteCredential(store: CredentialStore = defaultCredentialStore()): void {
+  store.delete()
+  if (loadConfig().authToken) saveConfig({ authToken: undefined })
 }
 
 export function getApiUrl(): string {

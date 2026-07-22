@@ -1,0 +1,41 @@
+name: Standalone dcli
+
+on:
+  workflow_dispatch:
+  push:
+    tags: ["v*"]
+  pull_request:
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: macos-14
+            artifact: darwin-arm64
+          - os: macos-15-intel
+            artifact: darwin-x64
+          - os: windows-2025
+            artifact: windows-x64
+          - os: ubuntu-24.04
+            artifact: linux-x64
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+      - run: npm ci
+      - run: npm test
+      - run: npm run build
+      - run: npm run standalone:build
+      - run: npm run standalone:smoke
+      - uses: actions/upload-artifact@v4
+        with:
+          name: dcli-${{ matrix.artifact }}
+          path: |
+            dist/standalone/dcli-*
+            dist/standalone/checksums.json
+            dist/standalone/SHA256SUMS

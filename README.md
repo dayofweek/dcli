@@ -1,91 +1,118 @@
 # @dayofweek/dcli
 
-CLI for the [Day of Week](https://dayofweek.com) AgTech platform.
+`dcli` is the Day of Week command-line client for personal and shared knowledge. It gives Agent Skills a narrow, auditable interface to shared notes and original sources without putting credentials or shared content inside your personal wiki.
 
-Read your organization's data and submit proposals for human review — nothing changes until you approve it.
+The Day of Week desktop app is the recommended installer. A signed standalone binary is also available for technical users; npm is required only when developing `dcli` itself.
 
-## Install
+## Sign in
 
 ```bash
-npm install -g @dayofweek/dcli
+dcli auth login --scopes brain:read,brain:write
+dcli auth status --json
+dcli doctor --json
 ```
 
-## Quick start
+Login uses a short-lived, single-use browser authorization code with PKCE. The device credential is stored in macOS Keychain, a Linux secret-service provider, Windows' protected credential file, or a permission-restricted file fallback. `dcli` does not write a new plaintext token to its JSON config.
+
+You can remove the device credential at any time:
 
 ```bash
-# Authenticate
-dcli auth set-token <your-token>
+dcli auth logout --json
+```
 
-# Browse your entities
+## Shared knowledge
+
+```bash
+# Discover spaces that this device may access
+dcli brain list --json
+
+# Search one space
+dcli brain search "soil health" --area <areaId> --json
+
+# Read a canonical Day of Week URI
+dcli brain get 'dayofweek://brain/<areaId>/note/<noteId>' --json
+
+# Explicitly share a local Markdown note
+dcli brain share --area <areaId> --title "Soil plan" \
+  --file wiki/soil-plan.md --intent interactive --json
+
+# Optimistic update; a stale version exits with the conflict exit code
+dcli brain update 'dayofweek://brain/<areaId>/note/<noteId>' \
+  --file wiki/soil-plan.md --if-version 3 --json
+```
+
+Autonomous note creation is saved as a draft. Interactive creation is saved as approved. An organization role, Studio role, or administrator role never grants shared-space access on its own: access requires an active device scope and an active membership in the exact destination space.
+
+### Original files
+
+Original files are deliberately separate from note text:
+
+```bash
+dcli brain source upload --area <areaId> --file research.pdf --mime application/pdf --json
+dcli brain source get 'dayofweek://brain/<areaId>/source/<sourceId>' --json
+dcli brain source download 'dayofweek://brain/<areaId>/source/<sourceId>' \
+  --output ./downloads/research.pdf --json
+```
+
+Downloads require an explicit output path, verify SHA-256 while streaming, fsync the temporary file, and install it atomically. Existing destinations are not replaced unless `--overwrite` is supplied. Recorded meetings also require `--meeting --consent-ack`; that flag is an explicit attestation that participants were informed and consented.
+
+## Agent Skills
+
+Named bundles are deterministic and available to authenticated devices:
+
+```bash
+dcli skill list --json
+dcli skill install personal-llm-wiki --dir .agents/skills/personal-llm-wiki --json
+dcli skill install dayofweek-brain --dir .agents/skills/dayofweek-brain --json
+dcli skill status dayofweek-brain --dir .agents/skills/dayofweek-brain --json
+dcli skill update dayofweek-brain --dir .agents/skills/dayofweek-brain --json
+```
+
+Updates overwrite only files whose installed hash still matches the managed manifest. Locally edited managed files are preserved and the new server version is written beside them as `<name>.new`.
+
+The legacy entity/proposal Agent Skill remains available through `dcli skill install` without a bundle name.
+
+## URI contract
+
+`dcli` accepts only exact canonical resource forms:
+
+```text
+dayofweek://brain/<areaId>/note/<noteId>
+dayofweek://brain/<areaId>/source/<sourceId>
+https://field.dayofweek.com/brain/<areaId>/note/<noteId>
+https://field.dayofweek.com/brain/<areaId>/source/<sourceId>
+```
+
+Unknown hosts, user-info, ports, query strings, fragments, encoded path separators, malformed identifiers, and oversized input are rejected before any API request.
+
+## Legacy platform commands
+
+Existing read/proposal workflows remain compatible:
+
+```bash
 dcli read entities --json
-
-# Submit a proposal
 dcli agent propose --op create --table hierarchyEntities \
   --title "New Farm" --source "my-agent" \
-  --parent <parentEntityId> --entity-type Farm \
-  --file payload.json
-
-# Check proposal status
-dcli agent proposals --status pending
+  --parent <parentEntityId> --entity-type Farm --file payload.json
+dcli agent proposals --status pending --json
 ```
 
-## Agent integration
+## Configuration and development
+
+Non-secret preferences are stored at `~/.config/dayofweek/dcli.json`.
+
+- `DCLI_API_URL` overrides the API base URL.
+- `DCLI_AUTH_TOKEN` and `--token` remain temporary compatibility overrides; they are not persisted by the current login flow.
+
+Development commands:
 
 ```bash
-# Install the Agent Skill for AI agents
-dcli skill install
-
-# Works with OpenClaw, Claude Code, Cursor, VS Code Copilot,
-# Gemini CLI, Goose, OpenHands, and 25+ others
+npm install
+npm test
+npm run build
+npm run standalone:build
+npm run standalone:smoke
 ```
-
-The skill follows the open [Agent Skills](https://agentskills.io) standard. After `dcli skill install`, any compatible agent on the machine discovers it automatically.
-
-## Commands
-
-### Authentication
-- `dcli auth login` — Authenticate via browser
-- `dcli auth set-token <token>` — Save a token locally
-- `dcli auth status` — Check token health
-- `dcli auth devices` — List your agent tokens
-- `dcli auth create-token <name>` — Create an agent token
-- `dcli auth revoke <id>` — Revoke a token
-
-### Reading data
-- `dcli read entities [--type Farm] [--parent <id>] [--limit 50]`
-- `dcli read entity <entityId>`
-- `dcli read produce [--entity <id>]`
-- `dcli read contacts [--entity <id>]`
-
-### Proposals
-- `dcli agent propose --op create --table <table> --title <title> [--file payload.json]`
-- `dcli agent propose-batch --label <label> --file batch.json`
-- `dcli agent proposals [--status pending]`
-- `dcli agent show <proposalId>`
-
-### Agent Skill
-- `dcli skill install` — Download skill (requires auth)
-- `dcli skill update` — Update to latest
-- `dcli skill status` — Check installed version
-
-## Configuration
-
-dcli stores its config at `~/.config/dayofweek/dcli.json`.
-
-Environment variables:
-- `DCLI_AUTH_TOKEN` — Auth token (overrides stored token)
-- `DCLI_API_URL` — Custom API base URL
-
-## REST API
-
-dcli talks to the Day of Week platform via a REST API. You can also call it directly:
-
-```bash
-curl -H "Authorization: Bearer dsk_xxx" \
-  "https://field.dayofweek.com/app/api/dcli/entities?type=Farm"
-```
-
-See the [API schema](https://field.dayofweek.com/app/api/dcli/schema) for all endpoints.
 
 ## License
 

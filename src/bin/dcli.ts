@@ -1,16 +1,17 @@
 #!/usr/bin/env node
 
 import { Command } from "commander"
-import { DayOfWeekClient } from "../client.js"
-import { getToken, getApiUrl, saveConfig, loadConfig } from "../config.js"
-import { readFileSync, existsSync, mkdirSync, writeFileSync } from "node:fs"
-import { join, dirname } from "node:path"
+import { ApiError, DayOfWeekClient } from "../client.js"
+import { getToken, getApiUrl, saveConfig, loadConfig, saveCredential, deleteCredential } from "../config.js"
+import { browserLogin } from "../auth/login.js"
+import { parseBrainResource } from "../uri.js"
+import { accessSync, constants, readFileSync, existsSync, statSync } from "node:fs"
+import { join, basename, resolve, relative, sep } from "node:path"
 import { homedir } from "node:os"
 import { createInterface } from "node:readline/promises"
-import { fileURLToPath } from "node:url"
-
-const __dirname = dirname(fileURLToPath(import.meta.url))
-const pkg = JSON.parse(readFileSync(join(__dirname, "../../package.json"), "utf-8"))
+import pkg from "../../package.json" with { type: "json" }
+import { createHash } from "node:crypto"
+import { validateSkillBundle, writeSkillBundle } from "../skills.js"
 
 const program = new Command()
   .name("dcli")
@@ -38,26 +39,29 @@ const auth = program.command("auth").description("Authentication commands")
 auth
   .command("login")
   .description("Authenticate via browser")
-  .action(async () => {
+  .option("--scopes <scopes>", "Comma-separated scopes", "brain:read,brain:write")
+  .option("--source-app <sourceApp>", "Authorization client", "dcli")
+  .action(async (opts: { scopes: string; sourceApp: string }) => {
     const apiUrl = program.opts().apiUrl ?? getApiUrl()
-    const baseUrl = apiUrl.replace("/api/dcli", "")
-    const authUrl = `${baseUrl}/dcli/auth`
-    console.log(`Opening browser for authentication...`)
-    console.log(`If the browser doesn't open, visit: ${authUrl}`)
-    const open = (await import("open")).default
-    await open(authUrl)
-    console.log("\nAfter authenticating, copy the token and run:")
-    console.log("  export DCLI_AUTH_TOKEN=<your-token>")
-    console.log("  # or")
-    console.log("  dcli auth set-token <your-token>")
+    const scopes = opts.scopes.split(",").map((scope) => scope.trim()).filter(Boolean)
+    if (opts.sourceApp !== "dcli" && opts.sourceApp !== "dayofweek-desktop") throw new Error("Invalid authorization client")
+    console.error("Opening Day of Week in your browser…")
+    const result = await browserLogin({ apiUrl, scopes, sourceApp: opts.sourceApp })
+    saveCredential(result.secret)
+    output({ authenticated: true, scopes: result.scopes, bootstrap: result.bootstrap })
   })
 
 auth
-  .command("set-token <token>")
-  .description("Save a token to local config")
-  .action((token: string) => {
-    saveConfig({ authToken: token })
-    console.log("Token saved to ~/.config/dayofweek/dcli.json")
+  .command("logout")
+  .description("Revoke and remove the credential from this device")
+  .action(async () => {
+    if (program.opts().token || process.env.DCLI_AUTH_TOKEN || process.env.DCLI_TOKEN) {
+      throw new Error("Unset the token override before logging out this device")
+    }
+    const client = new DayOfWeekClient(getToken(), getApiUrl())
+    await client.revokeCurrentDevice()
+    deleteCredential()
+    output({ authenticated: false, loggedOut: true, revoked: true })
   })
 
 auth
@@ -66,12 +70,24 @@ auth
   .action(async () => {
     try {
       const client = getClient()
-      const result = await client.checkAuth()
+      let result: unknown
+      try {
+        result = await client.brainBootstrap()
+      } catch (error) {
+        if (!(error instanceof ApiError) || error.code !== "scope_denied") throw error
+        result = await client.checkAuth()
+      }
       // Persist isAdmin so the next CLI invocation can register admin
       // subcommands in --help without a network round-trip. Stale cache
       // is harmless: admin commands still reject non-admin tokens at the
       // API boundary, and admin demotion is rare.
-      if (result.authenticated && typeof result.isAdmin === "boolean") {
+      if (
+        typeof result === "object" &&
+        result !== null &&
+        "authenticated" in result &&
+        "isAdmin" in result &&
+        typeof result.isAdmin === "boolean"
+      ) {
         saveConfig({ isAdmin: result.isAdmin, roleCachedAt: Date.now() })
       }
       output(result)
@@ -79,6 +95,211 @@ auth
       console.error(`Auth check failed: ${err.message}`)
       process.exit(1)
     }
+  })
+
+program
+  .command("doctor")
+  .description("Run machine-readable Day of Week health checks")
+  .action(async () => {
+    const project = inspectWikiProject(process.cwd())
+    const checks: Array<{ name: string; ok: boolean; detail?: string }> = [
+      { name: "binary", ok: true, detail: pkg.version },
+      { name: "credential", ok: false },
+      { name: "api", ok: false },
+      { name: "login", ok: false },
+      { name: "areas", ok: false },
+      project.manifest,
+      project.launcher,
+      project.skills,
+      project.write,
+      { name: "default_area", ok: false, detail: "manifest or API unavailable" },
+    ]
+    try {
+      getToken()
+      checks[1] = { name: "credential", ok: true }
+      const bootstrap = await getClient().brainBootstrap()
+      checks[2] = { name: "api", ok: true }
+      checks[3] = { name: "login", ok: bootstrap.authenticated, detail: bootstrap.scopes.join(",") }
+      checks[4] = { name: "areas", ok: bootstrap.areas.length > 0, detail: String(bootstrap.areas.length) }
+      const defaultArea = checks.find((check) => check.name === "default_area")!
+      defaultArea.ok = Boolean(project.defaultAreaId && bootstrap.areas.some((area) => area.id === project.defaultAreaId))
+      defaultArea.detail = defaultArea.ok ? project.defaultAreaId : "configured area is no longer accessible"
+      output({ ok: checks.every((check) => check.ok), checks, defaultAreaId: bootstrap.defaultAreaId })
+    } catch (error) {
+      output({ ok: false, checks, error: error instanceof Error ? error.message : "Health check failed" })
+      process.exitCode = 2
+    }
+  })
+
+// ── Shared Brain Commands ───────────────────────────────────────────────────
+
+const brain = program.command("brain").description("Work with shared Day of Week knowledge")
+
+const brainCompany = brain.command("company").description("Connect the idempotent company knowledge space")
+
+brainCompany
+  .command("status")
+  .description("Check whether the current hierarchy membership can connect a company space")
+  .action(async () => output(await getClient().companyBrainStatus()))
+
+brainCompany
+  .command("ensure")
+  .description("Create or connect the one company brain for the current entity")
+  .action(async () => output(await getClient().ensureCompanyBrain()))
+
+brain
+  .command("list")
+  .description("List accessible company and project spaces")
+  .action(async () => output(await getClient().listBrainAreas()))
+
+brain
+  .command("search <query>")
+  .description("Search accessible shared knowledge")
+  .option("--area <areaId>", "Restrict to one accessible area")
+  .option("--limit <count>", "Maximum results", (value) => Number.parseInt(value, 10), 10)
+  .action(async (query: string, opts: { area?: string; limit?: number }) => {
+    output(await getClient().searchBrain(query, { areaId: opts.area, limit: opts.limit }))
+  })
+
+brain
+  .command("get <uri>")
+  .description("Resolve a Day of Week brain URI")
+  .option("--markdown", "Print note markdown only")
+  .action(async (uri: string, opts: { markdown?: boolean }) => {
+    parseBrainResource(uri)
+    const result = await getClient().resolveBrain(uri)
+    if (opts.markdown) {
+      if (result.resourceType !== "note") throw new Error("--markdown requires a note URI")
+      process.stdout.write(result.note.markdown)
+      if (!result.note.markdown.endsWith("\n")) process.stdout.write("\n")
+      return
+    }
+    output(result)
+  })
+
+brain
+  .command("share")
+  .description("Explicitly share a markdown note")
+  .requiredOption("--area <areaId>", "Destination area")
+  .requiredOption("--title <title>", "Shared note title")
+  .option("--file <path>", "Markdown file")
+  .option("--stdin", "Read markdown from standard input")
+  .requiredOption("--intent <intent>", "interactive or autonomous")
+  .action(async (opts: { area: string; title: string; file?: string; stdin?: boolean; intent: string }) => {
+    if (Boolean(opts.file) === Boolean(opts.stdin)) throw new Error("Use exactly one of --file or --stdin")
+    if (opts.intent !== "interactive" && opts.intent !== "autonomous") throw new Error("Invalid --intent")
+    const markdown = opts.stdin ? await readStdin() : readFileSync(opts.file!, "utf8")
+    output(await getClient().shareBrainNote({
+      areaId: opts.area,
+      title: opts.title,
+      markdown,
+      sourceName: opts.file ? basename(opts.file) : undefined,
+      intent: opts.intent,
+    }))
+  })
+
+brain
+  .command("update <uri>")
+  .description("Update a shared note with optimistic concurrency")
+  .requiredOption("--file <path>", "Markdown file")
+  .requiredOption("--if-version <version>", "Expected current version", (value) => Number.parseInt(value, 10))
+  .option("--title <title>", "Updated title")
+  .action(async (uri: string, opts: { file: string; ifVersion: number; title?: string }) => {
+    const parsed = parseBrainResource(uri)
+    if (parsed.resourceType !== "note" || !parsed.resourceId) throw new Error("A note URI is required")
+    const note = await getClient().updateBrainNote(parsed.resourceId, {
+      title: opts.title,
+      markdown: readFileSync(opts.file, "utf8"),
+      expectedVersion: opts.ifVersion,
+    })
+    if (note.areaId !== parsed.areaId) throw new Error("Server returned a mismatched area")
+    output(note)
+  })
+
+brain
+  .command("archive <uri>")
+  .description("Soft-archive a shared note")
+  .requiredOption("--if-version <version>", "Expected current version", (value) => Number.parseInt(value, 10))
+  .action(async (uri: string, opts: { ifVersion: number }) => {
+    const parsed = parseBrainResource(uri)
+    if (parsed.resourceType !== "note" || !parsed.resourceId) throw new Error("A note URI is required")
+    const note = await getClient().archiveBrainNote(parsed.resourceId, opts.ifVersion)
+    if (note.areaId !== parsed.areaId) throw new Error("Server returned a mismatched area")
+    output(note)
+  })
+
+brain
+  .command("restore <uri>")
+  .description("Restore an archived shared note")
+  .requiredOption("--if-version <version>", "Expected current version", (value) => Number.parseInt(value, 10))
+  .action(async (uri: string, opts: { ifVersion: number }) => {
+    const parsed = parseBrainResource(uri)
+    if (parsed.resourceType !== "note" || !parsed.resourceId) throw new Error("A note URI is required")
+    const note = await getClient().restoreBrainNote(parsed.resourceId, opts.ifVersion)
+    if (note.areaId !== parsed.areaId) throw new Error("Server returned a mismatched area")
+    output(note)
+  })
+
+brain
+  .command("audit")
+  .description("List bounded audit metadata (area owner and brain:manage scope required)")
+  .requiredOption("--area <areaId>", "Area to inspect")
+  .option("--cursor <cursor>", "Pagination cursor")
+  .option("--limit <count>", "Maximum events", (value) => Number.parseInt(value, 10), 50)
+  .action(async (opts: { area: string; cursor?: string; limit?: number }) => {
+    output(await getClient().listBrainAudit(opts.area, { cursor: opts.cursor, limit: opts.limit }))
+  })
+
+const brainSource = brain.command("source").description("Work with original shared files and recordings")
+
+brainSource
+  .command("get <uri>")
+  .description("Read source metadata and derived text")
+  .action(async (uri: string) => {
+    const parsed = parseBrainResource(uri)
+    if (parsed.resourceType !== "source" || !parsed.resourceId) throw new Error("A source URI is required")
+    const source = await getClient().getBrainSource(parsed.resourceId)
+    if (source.areaId !== parsed.areaId) throw new Error("Server returned a mismatched area")
+    output(source)
+  })
+
+brainSource
+  .command("upload")
+  .description("Upload an original file or meeting recording")
+  .requiredOption("--area <areaId>", "Destination area")
+  .requiredOption("--file <path>", "File to upload")
+  .option("--mime <mimeType>", "MIME type; inferred from extension when omitted")
+  .option("--meeting", "Mark this source as a recorded meeting")
+  .option("--consent-ack", "Confirm recorded participants were informed and consented")
+  .action(async (opts: { area: string; file: string; mime?: string; meeting?: boolean; consentAck?: boolean }) => {
+    if (opts.meeting && !opts.consentAck) {
+      throw new Error("--consent-ack is required: you are attesting that recorded participants were informed and consented")
+    }
+    output(await getClient().uploadBrainSource({
+      areaId: opts.area,
+      path: opts.file,
+      mimeType: opts.mime ?? inferMimeType(opts.file),
+      isMeeting: opts.meeting ?? false,
+      consentAcknowledged: opts.consentAck ?? false,
+    }))
+  })
+
+brainSource
+  .command("download <uri>")
+  .description("Download exact original bytes to an explicit path")
+  .requiredOption("--output <path>", "Explicit output file")
+  .option("--overwrite", "Replace an existing output file")
+  .action(async (uri: string, opts: { output: string; overwrite?: boolean }) => {
+    const parsed = parseBrainResource(uri)
+    if (parsed.resourceType !== "source" || !parsed.resourceId) throw new Error("A source URI is required")
+    const source = await getClient().getBrainSource(parsed.resourceId)
+    if (source.areaId !== parsed.areaId) throw new Error("Server returned a mismatched area")
+    output(await getClient().downloadBrainSource({
+      sourceId: source.id,
+      outputPath: opts.output,
+      expectedSha256: source.sha256,
+      overwrite: opts.overwrite,
+    }))
   })
 
 auth
@@ -288,15 +509,106 @@ function resolveTargetDirs(target: SkillTarget, bundleName: string, customDir?: 
   }
 }
 
-function writeBundle(bundle: { files: Array<{ path: string; content: string }> }, targetDir: string): number {
-  let filesWritten = 0
-  for (const file of bundle.files) {
-    const filePath = join(targetDir, file.path)
-    mkdirSync(dirname(filePath), { recursive: true })
-    writeFileSync(filePath, file.content, "utf-8")
-    filesWritten++
+function sha256(value: string | Buffer): string {
+  return createHash("sha256").update(value).digest("hex")
+}
+
+type DoctorCheck = { name: string; ok: boolean; detail?: string }
+
+function inspectWikiProject(directory: string): {
+  manifest: DoctorCheck
+  launcher: DoctorCheck
+  skills: DoctorCheck
+  write: DoctorCheck
+  defaultAreaId?: string
+} {
+  const root = resolve(directory)
+  const manifestPath = join(root, ".dayofweek", "manifest.json")
+  const missing = {
+    manifest: { name: "project_manifest", ok: false, detail: "not found in current directory" },
+    launcher: { name: "project_launcher", ok: false, detail: "manifest unavailable" },
+    skills: { name: "project_skills", ok: false, detail: "manifest unavailable" },
+    write: { name: "project_write", ok: false, detail: "manifest unavailable" },
   }
-  return filesWritten
+  if (!existsSync(manifestPath)) return missing
+
+  try {
+    const manifest = JSON.parse(readFileSync(manifestPath, "utf8")) as {
+      schemaVersion?: number
+      dcliVersion?: string
+      dcliRuntimePath?: string
+      managedFiles?: Record<string, string>
+      skillVersions?: Record<string, string>
+      defaultAreaId?: string
+    }
+    if (
+      manifest.schemaVersion !== 1 ||
+      typeof manifest.dcliRuntimePath !== "string" ||
+      !manifest.managedFiles ||
+      typeof manifest.managedFiles !== "object"
+    ) {
+      return {
+        manifest: { name: "project_manifest", ok: false, detail: "invalid schema" },
+        launcher: missing.launcher,
+        skills: missing.skills,
+        write: missing.write,
+      }
+    }
+
+    const runtime = resolve(manifest.dcliRuntimePath)
+    const runtimeOk = existsSync(runtime) && statSync(runtime).isFile()
+    const launcherPaths = process.platform === "win32"
+      ? [".dayofweek/bin/dcli.cmd"]
+      : [".dayofweek/bin/dcli"]
+    const launcherOk = runtimeOk && launcherPaths.every((path) => managedFileMatches(root, path, manifest.managedFiles!))
+    const skillNames = ["personal-llm-wiki", "dayofweek-brain"]
+    const skillPaths = skillNames.flatMap((name) => [
+      `.agents/skills/${name}/SKILL.md`,
+      `.claude/skills/${name}/SKILL.md`,
+    ])
+    const skillsOk = skillPaths.every((path) => managedFileMatches(root, path, manifest.managedFiles!))
+    let writeOk = false
+    try {
+      accessSync(root, constants.W_OK)
+      writeOk = true
+    } catch {
+      writeOk = false
+    }
+    return {
+      manifest: {
+        name: "project_manifest",
+        ok: true,
+        detail: `schema=1 dcli=${manifest.dcliVersion ?? "unknown"}`,
+      },
+      launcher: {
+        name: "project_launcher",
+        ok: launcherOk,
+        detail: runtimeOk ? (launcherOk ? "managed launcher verified" : "launcher modified or missing") : "managed runtime missing",
+      },
+      skills: {
+        name: "project_skills",
+        ok: skillsOk,
+        detail: skillsOk ? Object.entries(manifest.skillVersions ?? {}).map(([name, version]) => `${name}@${version}`).join(",") : "managed skill modified or missing",
+      },
+      write: { name: "project_write", ok: writeOk, detail: writeOk ? "folder is writable" : "folder is not writable" },
+      defaultAreaId: manifest.defaultAreaId,
+    }
+  } catch {
+    return {
+      manifest: { name: "project_manifest", ok: false, detail: "unreadable or malformed" },
+      launcher: missing.launcher,
+      skills: missing.skills,
+      write: missing.write,
+    }
+  }
+}
+
+function managedFileMatches(root: string, relativePath: string, managedFiles: Record<string, string>): boolean {
+  const expected = managedFiles[relativePath]
+  const target = resolve(root, relativePath)
+  const pathFromRoot = relative(root, target)
+  const insideRoot = pathFromRoot !== ".." && !pathFromRoot.startsWith(`..${sep}`) && !pathFromRoot.startsWith(sep)
+  return Boolean(expected && insideRoot && existsSync(target) && sha256(readFileSync(target)) === expected)
 }
 
 function parseTarget(value: string | undefined): SkillTarget {
@@ -309,47 +621,60 @@ function parseTarget(value: string | undefined): SkillTarget {
 }
 
 skill
-  .command("install")
+  .command("list")
+  .description("List authenticated named skill bundles")
+  .action(async () => output(await getClient().listSkillBundles()))
+
+skill
+  .command("bundle <name>")
+  .description("Fetch and verify a named skill bundle for a managed installer")
+  .action(async (name: string) => output(validateSkillBundle(await getClient().getSkillBundle(name))))
+
+skill
+  .command("install [name]")
   .description("Install the agent skill (requires valid auth)")
   .option("--dir <path>", "Custom install directory (overrides --target)")
   .option("--target <target>", "Install target: agents, claude, or all (default: all)")
-  .action(async (opts) => {
+  .action(async (name: string | undefined, opts) => {
     const client = getClient()
-    const bundle = await client.getSkillBundle()
+    const bundle = await client.getSkillBundle(name)
     const target = parseTarget(opts.target)
     const dirs = resolveTargetDirs(target, bundle.name, opts.dir)
 
+    const installations = []
     for (const dir of dirs) {
-      const count = writeBundle(bundle, dir)
-      console.log(`Installed ${count} files to ${dir}`)
+      const result = writeSkillBundle(bundle, dir)
+      installations.push({ directory: dir, ...result })
     }
-    console.log("Any compatible agent will discover the skill automatically.")
+    output({ action: "install", bundle: bundle.name, version: bundle.version, hash: bundle.hash, installations })
   })
 
 skill
-  .command("update")
+  .command("update [name]")
   .description("Update the skill to the latest version")
   .option("--dir <path>", "Custom install directory (overrides --target)")
   .option("--target <target>", "Install target: agents, claude, or all (default: all)")
-  .action(async (opts) => {
+  .action(async (name: string | undefined, opts) => {
     const client = getClient()
-    const bundle = await client.getSkillBundle()
+    const bundle = await client.getSkillBundle(name)
     const target = parseTarget(opts.target)
     const dirs = resolveTargetDirs(target, bundle.name, opts.dir)
 
+    const installations = []
     for (const dir of dirs) {
-      const count = writeBundle(bundle, dir)
-      console.log(`Updated ${count} files in ${dir}`)
+      const result = writeSkillBundle(bundle, dir)
+      installations.push({ directory: dir, ...result })
     }
+    output({ action: "update", bundle: bundle.name, version: bundle.version, hash: bundle.hash, installations })
   })
 
 skill
-  .command("status")
+  .command("status [name]")
   .description("Check if the skill is installed")
   .option("--dir <path>", "Custom install directory (overrides --target)")
   .option("--target <target>", "Check target: agents, claude, or all (default: all)")
-  .action(async (opts) => {
-    const bundleName = "dayofweek-platform"
+  .action(async (name: string | undefined, opts) => {
+    const bundleName = name ?? "dayofweek-platform"
     const target = parseTarget(opts.target)
     const dirs = opts.dir
       ? [opts.dir]
@@ -357,25 +682,20 @@ skill
         ? [join(homedir(), ".agents", "skills", bundleName), join(homedir(), ".claude", "skills", bundleName)]
         : resolveTargetDirs(target, bundleName)
 
-    let anyInstalled = false
+    const installations: Array<{ installed: boolean; directory: string; name: string; version?: string; sha256?: string }> = []
     for (const dir of dirs) {
       const skillPath = join(dir, "SKILL.md")
       if (!existsSync(skillPath)) {
-        console.log(`Not installed at: ${dir}`)
+        installations.push({ installed: false, directory: dir, name: bundleName })
         continue
       }
-      anyInstalled = true
       const content = readFileSync(skillPath, "utf-8")
       const versionMatch = content.match(/version:\s*"([^"]+)"/)
-      console.log(`Installed at: ${dir}`)
-      console.log(`  Version: ${versionMatch?.[1] ?? "unknown"}`)
+      installations.push({ installed: true, directory: dir, name: bundleName, version: versionMatch?.[1] ?? "unknown", sha256: sha256(content) })
     }
-
-    if (!anyInstalled) {
-      console.log("\nRun: dcli skill install")
-      process.exit(1)
-    }
-    console.log("\nTo update: dcli skill update")
+    const installed = installations.some((entry) => entry.installed)
+    output({ installed, bundle: bundleName, installations })
+    if (!installed) process.exitCode = 2
   })
 
 // ── Admin Commands ───────────────────────────────────────────────────────────
@@ -447,9 +767,39 @@ async function readStdin(): Promise<string> {
   return chunks.join("\n")
 }
 
+function inferMimeType(path: string): string {
+  const extension = path.toLowerCase().split(".").at(-1)
+  const types: Record<string, string> = {
+    pdf: "application/pdf",
+    md: "text/markdown",
+    txt: "text/plain",
+    csv: "text/csv",
+    json: "application/json",
+    docx: "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+    xlsx: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+    mp3: "audio/mpeg",
+    m4a: "audio/mp4",
+    wav: "audio/wav",
+    mp4: "video/mp4",
+  }
+  const mime = extension ? types[extension] : undefined
+  if (!mime) throw new Error("Could not infer MIME type; pass --mime")
+  return mime
+}
+
 // ── Run ──────────────────────────────────────────────────────────────────────
 
 program.parseAsync(process.argv).catch((err) => {
   console.error(err.message ?? err)
-  process.exit(1)
+  if (err instanceof ApiError) {
+    const code = err.code
+    process.exit(
+      code === "unauthenticated" ? 2 :
+      code === "scope_denied" || code === "not_found" ? 3 :
+      code === "conflict" ? 4 :
+      code === "quarantined" ? 7 :
+      err.status >= 500 ? 6 : 5,
+    )
+  }
+  process.exit(5)
 })
