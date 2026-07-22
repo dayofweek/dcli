@@ -26,5 +26,6 @@ describe("documented v1 command surface", () => {
     expect(authHelp).toContain("status")
     expect(authHelp).toContain("logout")
     expect(help("brain", "source")).toContain("get")
+    expect(help("skill")).toContain("bundle")
   })
 })

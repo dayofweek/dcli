@@ -5,12 +5,13 @@ import { ApiError, DayOfWeekClient } from "../client.js"
 import { getToken, getApiUrl, saveConfig, loadConfig, saveCredential, deleteCredential } from "../config.js"
 import { browserLogin } from "../auth/login.js"
 import { parseBrainResource } from "../uri.js"
-import { accessSync, constants, readFileSync, existsSync, mkdirSync, writeFileSync, statSync } from "node:fs"
-import { join, dirname, basename, resolve, relative, sep } from "node:path"
+import { accessSync, constants, readFileSync, existsSync, statSync } from "node:fs"
+import { join, basename, resolve, relative, sep } from "node:path"
 import { homedir } from "node:os"
 import { createInterface } from "node:readline/promises"
 import pkg from "../../package.json" with { type: "json" }
 import { createHash } from "node:crypto"
+import { validateSkillBundle, writeSkillBundle } from "../skills.js"
 
 const program = new Command()
   .name("dcli")
@@ -39,11 +40,13 @@ auth
   .command("login")
   .description("Authenticate via browser")
   .option("--scopes <scopes>", "Comma-separated scopes", "brain:read,brain:write")
-  .action(async (opts: { scopes: string }) => {
+  .option("--source-app <sourceApp>", "Authorization client", "dcli")
+  .action(async (opts: { scopes: string; sourceApp: string }) => {
     const apiUrl = program.opts().apiUrl ?? getApiUrl()
     const scopes = opts.scopes.split(",").map((scope) => scope.trim()).filter(Boolean)
+    if (opts.sourceApp !== "dcli" && opts.sourceApp !== "dayofweek-desktop") throw new Error("Invalid authorization client")
     console.error("Opening Day of Week in your browser…")
-    const result = await browserLogin({ apiUrl, scopes })
+    const result = await browserLogin({ apiUrl, scopes, sourceApp: opts.sourceApp })
     saveCredential(result.secret)
     output({ authenticated: true, scopes: result.scopes, bootstrap: result.bootstrap })
   })
@@ -608,46 +611,6 @@ function managedFileMatches(root: string, relativePath: string, managedFiles: Re
   return Boolean(expected && insideRoot && existsSync(target) && sha256(readFileSync(target)) === expected)
 }
 
-function writeBundle(
-  bundle: { name: string; version: string; hash?: string; files: Array<{ path: string; content: string; sha256?: string }> },
-  targetDir: string,
-): { written: number; unchanged: number; conflicts: string[] } {
-  let filesWritten = 0
-  let unchanged = 0
-  const conflicts: string[] = []
-  const metadataPath = join(targetDir, ".dayofweek-skill.json")
-  const previous = existsSync(metadataPath)
-    ? JSON.parse(readFileSync(metadataPath, "utf8")) as { files?: Record<string, string> }
-    : undefined
-  const hashes: Record<string, string> = {}
-  for (const file of bundle.files) {
-    if (file.path.startsWith("/") || file.path.split(/[\\/]/).includes("..")) {
-      throw new Error("Skill bundle contained an unsafe path")
-    }
-    const filePath = join(targetDir, file.path)
-    const nextHash = file.sha256 ?? sha256(file.content)
-    hashes[file.path] = nextHash
-    mkdirSync(dirname(filePath), { recursive: true })
-    if (existsSync(filePath)) {
-      const currentHash = sha256(readFileSync(filePath, "utf8"))
-      if (currentHash === nextHash) {
-        unchanged++
-        continue
-      }
-      if (previous?.files?.[file.path] !== currentHash) {
-        writeFileSync(`${filePath}.new`, file.content, "utf8")
-        conflicts.push(`${file.path}.new`)
-        continue
-      }
-    }
-    writeFileSync(filePath, file.content, "utf-8")
-    filesWritten++
-  }
-  mkdirSync(targetDir, { recursive: true })
-  writeFileSync(metadataPath, JSON.stringify({ name: bundle.name, version: bundle.version, hash: bundle.hash, files: hashes }, null, 2), "utf8")
-  return { written: filesWritten, unchanged, conflicts }
-}
-
 function parseTarget(value: string | undefined): SkillTarget {
   const v = (value ?? "all").toLowerCase()
   if (v !== "agents" && v !== "claude" && v !== "all") {
@@ -663,6 +626,11 @@ skill
   .action(async () => output(await getClient().listSkillBundles()))
 
 skill
+  .command("bundle <name>")
+  .description("Fetch and verify a named skill bundle for a managed installer")
+  .action(async (name: string) => output(validateSkillBundle(await getClient().getSkillBundle(name))))
+
+skill
   .command("install [name]")
   .description("Install the agent skill (requires valid auth)")
   .option("--dir <path>", "Custom install directory (overrides --target)")
@@ -675,7 +643,7 @@ skill
 
     const installations = []
     for (const dir of dirs) {
-      const result = writeBundle(bundle, dir)
+      const result = writeSkillBundle(bundle, dir)
       installations.push({ directory: dir, ...result })
     }
     output({ action: "install", bundle: bundle.name, version: bundle.version, hash: bundle.hash, installations })
@@ -694,7 +662,7 @@ skill
 
     const installations = []
     for (const dir of dirs) {
-      const result = writeBundle(bundle, dir)
+      const result = writeSkillBundle(bundle, dir)
       installations.push({ directory: dir, ...result })
     }
     output({ action: "update", bundle: bundle.name, version: bundle.version, hash: bundle.hash, installations })
