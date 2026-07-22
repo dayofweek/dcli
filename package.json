@@ -16,6 +16,10 @@
   "scripts": {
     "build": "tsc",
     "dev": "tsx src/bin/dcli.ts",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "standalone:build": "node scripts/build-standalone.mjs",
+    "standalone:smoke": "node scripts/smoke-standalone.mjs",
     "prepublishOnly": "npm run build"
   },
   "dependencies": {
@@ -23,9 +27,12 @@
     "open": "^11.0.0"
   },
   "devDependencies": {
+    "@types/node": "^22.0.0",
+    "esbuild": "^0.25.0",
+    "postject": "^1.0.0-alpha.6",
     "tsx": "^4.21.0",
     "typescript": "^5.9.0",
-    "@types/node": "^22.0.0"
+    "vitest": "^4.0.0"
   },
   "publishConfig": {
     "access": "public"
