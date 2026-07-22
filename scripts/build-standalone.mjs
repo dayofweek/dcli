@@ -38,7 +38,7 @@ writeFileSync(config, JSON.stringify({
 function run(command, args) {
   const result = spawnSync(command, args, { cwd: root, encoding: "utf8" })
   if (result.status !== 0) {
-    throw new Error(`${command} failed: ${result.stderr || result.stdout}`)
+    throw new Error(`${command} failed: ${result.error?.message || result.stderr || result.stdout}`)
   }
 }
 
@@ -51,7 +51,7 @@ copyFileSync(process.execPath, artifact)
 if (process.platform !== "win32") chmodSync(artifact, 0o755)
 if (process.platform === "darwin") run("codesign", ["--remove-signature", artifact])
 
-const postject = join(root, "node_modules", ".bin", process.platform === "win32" ? "postject.cmd" : "postject")
+const postject = join(root, "node_modules", "postject", "dist", "cli.js")
 const postjectArgs = [
   artifact,
   "NODE_SEA_BLOB",
@@ -60,7 +60,7 @@ const postjectArgs = [
   "NODE_SEA_FUSE_fce680ab2cc467b6e072b8b5df1996b2",
 ]
 if (process.platform === "darwin") postjectArgs.push("--macho-segment-name", "NODE_SEA")
-run(postject, postjectArgs)
+run(process.execPath, [postject, ...postjectArgs])
 if (process.platform === "darwin") run("codesign", ["--sign", "-", artifact])
 
 const bytes = readFileSync(artifact)
