@@ -28,4 +28,13 @@ describe("documented v1 command surface", () => {
     expect(help("brain", "source")).toContain("get")
     expect(help("skill")).toContain("bundle")
   }, 60_000)
+
+  // The server has always accepted an org on both proposal endpoints. While the
+  // CLI didn't send one, an admin's proposals were filed under their own org but
+  // applied to whatever entity the payload named, so the review queue and the
+  // affected data pointed at different customers.
+  it("lets admins target another org when proposing", () => {
+    expect(help("agent", "propose")).toContain("--org")
+    expect(help("agent", "propose-batch")).toContain("--org")
+  }, 60_000)
 })

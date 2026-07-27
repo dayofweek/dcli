@@ -310,7 +310,12 @@ export class DayOfWeekClient {
     return this.post("/proposals", proposal)
   }
 
-  async submitBatch(batch: { batchLabel: string; sourceAgent?: string; proposals: any[] }): Promise<any> {
+  async submitBatch(batch: {
+    org?: string
+    batchLabel: string
+    sourceAgent?: string
+    proposals: any[]
+  }): Promise<any> {
     return this.post("/proposals/batch", batch)
   }
 
