@@ -14,13 +14,18 @@ jobs:
     environment: npm
     steps:
       - uses: actions/checkout@v4
+      # Trusted publishing (OIDC): npm exchanges the GitHub Actions identity for
+      # publish access — no NPM_TOKEN to expire or leak. The v1.4.0 publish died
+      # with an auth-shaped 404 because the stored granular token had expired;
+      # tokens age out, workflow identities do not. Requires the trusted
+      # publisher configured on npmjs.com for this repo + workflow + environment,
+      # npm >= 11.5.1 (Node 24), and NO registry-url in setup-node — that writes
+      # an _authToken placeholder into .npmrc which errors when the env var is
+      # absent and would bypass the OIDC flow.
       - uses: actions/setup-node@v4
         with:
-          node-version: 20
+          node-version: 24
           cache: npm
-          registry-url: https://registry.npmjs.org
       - run: npm ci
       - run: npm run build
-      - run: npm publish --provenance
-        env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+      - run: npm publish
