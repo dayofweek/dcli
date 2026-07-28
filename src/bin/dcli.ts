@@ -418,6 +418,7 @@ agent
   .option("--parent <entityId>", "Parent entity ID")
   .option("--entity-type <type>", "Entity type (Farm, Producer, ...)")
   .option("--target-id <id>", "Target record ID (for update/delete)")
+  .option("--org <slug>", "File against another org (admin tokens only)")
   .option("--file <path>", "Read payload from JSON file (- for stdin)")
   .option("--payload <json>", "Inline JSON payload")
   .action(async (opts) => {
@@ -431,6 +432,7 @@ agent
 
     const client = getClient()
     const result = await client.submitProposal({
+      org: opts.org,
       operation: opts.op,
       targetTable: opts.table,
       title: opts.title,
@@ -451,6 +453,7 @@ agent
   .description("Submit multiple proposals")
   .requiredOption("--label <label>", "Batch label")
   .option("--source <agent>", "Agent identifier")
+  .option("--org <slug>", "File against another org (admin tokens only)")
   .requiredOption("--file <path>", "JSON file with proposals array (- for stdin)")
   .action(async (opts) => {
     const content = opts.file === "-"
@@ -460,6 +463,7 @@ agent
 
     const client = getClient()
     const result = await client.submitBatch({
+      org: opts.org,
       batchLabel: opts.label,
       sourceAgent: opts.source,
       proposals: Array.isArray(proposals) ? proposals : [proposals],
