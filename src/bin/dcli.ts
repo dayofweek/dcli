@@ -1,11 +1,11 @@
 #!/usr/bin/env node
 
 import { Command } from "commander"
-import { ApiError, DayOfWeekClient } from "../client.js"
+import { ApiError, DayOfWeekClient, toArrayBuffer } from "../client.js"
 import { getToken, getApiUrl, saveConfig, loadConfig, saveCredential, deleteCredential } from "../config.js"
 import { browserLogin } from "../auth/login.js"
 import { parseBrainResource } from "../uri.js"
-import { accessSync, constants, readFileSync, existsSync, statSync } from "node:fs"
+import { accessSync, constants, mkdirSync, readFileSync, existsSync, statSync, writeFileSync } from "node:fs"
 import { join, basename, resolve, relative, sep } from "node:path"
 import { homedir } from "node:os"
 import { createInterface } from "node:readline/promises"
@@ -490,6 +490,215 @@ agent
     const client = getClient()
     const result = await client.getProposal(proposalId)
     output(result)
+  })
+
+// ── Knowledge Commands ───────────────────────────────────────────────────────
+
+const MIME_BY_EXT: Record<string, string> = {
+  ".pdf": "application/pdf",
+  ".md": "text/markdown",
+  ".txt": "text/plain",
+  ".csv": "text/csv",
+  ".json": "application/json",
+  ".html": "text/html",
+  ".docx": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+  ".doc": "application/msword",
+  ".xlsx": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+  ".xls": "application/vnd.ms-excel",
+  ".pptx": "application/vnd.openxmlformats-officedocument.presentationml.presentation",
+}
+
+function guessMimeType(path: string): string {
+  const dot = path.lastIndexOf(".")
+  const ext = dot === -1 ? "" : path.slice(dot).toLowerCase()
+  return MIME_BY_EXT[ext] ?? "application/octet-stream"
+}
+
+/** Filesystem-safe name for an exported document, keeping it recognisable. */
+function exportFileName(doc: { id?: string; title?: string; fileName?: string }): string {
+  const base = (doc.fileName || doc.title || doc.id || "document").trim()
+  const stripped = base.replace(/\.(md|txt)$/i, "")
+  const safe = stripped.replace(/[/\\:*?"<>|]+/g, "-").replace(/\s+/g, " ").slice(0, 120)
+  return `${safe || doc.id || "document"}.md`
+}
+
+const knowledge = program
+  .command("knowledge")
+  .description("Read, add and export entity knowledge documents")
+
+knowledge
+  .command("list")
+  .description("List knowledge documents on an entity")
+  .requiredOption("--entity <entityId>", "Target entity id")
+  .option("--full", "Include each document's full content, not an excerpt")
+  .option("--org <org>", "Organization (admin only)")
+  .action(async (opts) => {
+    const client = getClient()
+    output(await client.listKnowledge({ entity: opts.entity, full: opts.full, org: opts.org }))
+  })
+
+knowledge
+  .command("get <documentId>")
+  .description("Show one knowledge document with full content")
+  .option("--org <org>", "Organization (admin only)")
+  .action(async (documentId: string, opts) => {
+    const client = getClient()
+    output(await client.getKnowledge(documentId, opts.org))
+  })
+
+knowledge
+  .command("search <query>")
+  .description("Semantic search across knowledge documents")
+  .option("--entity <entityId>", "Scope to one entity's org tree")
+  .option("--types <types>", "Comma-separated sourceType filter")
+  .option("--limit <count>", "Max hits", parseInt)
+  .option("--all-orgs", "Search every org (admin only)")
+  .option("--org <org>", "Organization (admin only)")
+  .action(async (query: string, opts) => {
+    const client = getClient()
+    output(
+      await client.searchKnowledge({
+        query,
+        entity: opts.entity,
+        types: opts.types
+          ? String(opts.types).split(",").map((t: string) => t.trim()).filter(Boolean)
+          : undefined,
+        limit: opts.limit,
+        allOrgs: opts.allOrgs,
+        org: opts.org,
+      }),
+    )
+  })
+
+knowledge
+  .command("add")
+  .description("Add a markdown knowledge note (proposal by default)")
+  .requiredOption("--entity <entityId>", "Target entity id")
+  .requiredOption("--title <title>", "Document title")
+  .option("--file <path>", "Markdown file to read (- for stdin)")
+  .option("--content <text>", "Inline content instead of --file")
+  .option("--source-type <type>", "research | website | competitive_intel | …", "research")
+  .option("--source-url <url>", "Where the content came from")
+  .option("--source-description <text>", "Short provenance note")
+  .option("--confidence <n>", "0-1, helps reviewers prioritize", parseFloat)
+  .option("--source-agent <name>", "Attribution for the submitting agent")
+  .option(
+    "--direct",
+    "Write immediately instead of proposing. Admin only — ask the operator first",
+  )
+  .option("--org <org>", "Organization (admin only)")
+  .action(async (opts) => {
+    let content: string
+    if (opts.content) {
+      content = String(opts.content)
+    } else if (opts.file) {
+      content = opts.file === "-" ? readFileSync(0, "utf8") : readFileSync(opts.file, "utf8")
+    } else {
+      throw new Error("Provide --file or --content")
+    }
+    if (!content.trim()) throw new Error("Content is empty")
+
+    const client = getClient()
+    output(
+      await client.addKnowledge({
+        entityId: opts.entity,
+        title: opts.title,
+        content,
+        sourceType: opts.sourceType,
+        sourceUrl: opts.sourceUrl,
+        sourceDescription: opts.sourceDescription,
+        confidence: opts.confidence,
+        sourceAgent: opts.sourceAgent,
+        direct: Boolean(opts.direct),
+        org: opts.org,
+      }),
+    )
+  })
+
+knowledge
+  .command("attach")
+  .description("Attach a file (PDF, DOCX, XLSX …) as a source. Admin only")
+  .requiredOption("--entity <entityId>", "Target entity id")
+  .requiredOption("--file <path>", "File to upload")
+  .option("--name <fileName>", "Stored file name (defaults to the file's own)")
+  .option("--mime <mimeType>", "Content type (guessed from the extension)")
+  .option("--source-type <type>", "research | website | contract | …", "other")
+  .option("--source-url <url>", "Where the file came from")
+  .option("--source-description <text>", "Short provenance note")
+  .option("--org <org>", "Organization (admin only)")
+  .action(async (opts) => {
+    if (!existsSync(opts.file)) throw new Error(`File not found: ${opts.file}`)
+    const data = readFileSync(opts.file)
+    if (data.byteLength === 0) throw new Error("File is empty")
+
+    const client = getClient()
+    output(
+      await client.attachKnowledgeFile({
+        entityId: opts.entity,
+        data: toArrayBuffer(data),
+        fileName: opts.name ?? basename(opts.file),
+        mimeType: opts.mime ?? guessMimeType(opts.file),
+        sourceType: opts.sourceType,
+        sourceUrl: opts.sourceUrl,
+        sourceDescription: opts.sourceDescription,
+        org: opts.org,
+      }),
+    )
+  })
+
+knowledge
+  .command("export")
+  .description("Write an entity's knowledge documents to disk as markdown")
+  .requiredOption("--entity <entityId>", "Source entity id")
+  .requiredOption("--out <dir>", "Directory to write into (created if missing)")
+  .option("--org <org>", "Organization (admin only)")
+  .action(async (opts) => {
+    const client = getClient()
+    const docs = await client.listKnowledge({ entity: opts.entity, full: true, org: opts.org })
+
+    mkdirSync(opts.out, { recursive: true })
+
+    const written: Array<{ id: string; file: string; bytes: number }> = []
+    const skipped: Array<{ id: string; title?: string; reason: string }> = []
+
+    for (const doc of docs) {
+      const body = typeof doc.content === "string" ? doc.content : ""
+      if (!body) {
+        // A binary source whose text extraction hasn't finished has nothing to
+        // mirror yet. Report it rather than writing an empty file.
+        skipped.push({
+          id: doc.id,
+          title: doc.title,
+          reason:
+            doc.processingStatus && doc.processingStatus !== "completed"
+              ? `processingStatus=${doc.processingStatus}`
+              : "no extracted content",
+        })
+        continue
+      }
+
+      const frontMatter = [
+        "---",
+        `document_id: ${doc.id}`,
+        `title: ${JSON.stringify(doc.title ?? "")}`,
+        `source_type: ${doc.sourceType ?? "other"}`,
+        ...(doc.sourceUrl ? [`source_url: ${doc.sourceUrl}`] : []),
+        ...(doc.sourceDescription
+          ? [`source_description: ${JSON.stringify(doc.sourceDescription)}`]
+          : []),
+        `entity_id: ${opts.entity}`,
+        ...(doc.createdAt ? [`created_at: ${new Date(doc.createdAt).toISOString()}`] : []),
+        "exported_from: dayofweek-platform",
+        "---",
+        "",
+      ].join("\n")
+
+      const target = join(opts.out, exportFileName(doc))
+      writeFileSync(target, `${frontMatter}${body}\n`, "utf8")
+      written.push({ id: doc.id, file: target, bytes: Buffer.byteLength(body, "utf8") })
+    }
+
+    output({ entity: opts.entity, out: opts.out, total: docs.length, written, skipped })
   })
 
 // ── Skill Commands ───────────────────────────────────────────────────────────

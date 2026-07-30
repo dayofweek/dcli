@@ -11,6 +11,16 @@ import { pipeline } from "node:stream/promises"
 
 const DEFAULT_BASE_URL = "https://field.dayofweek.com/app/api/dcli"
 
+/**
+ * Node's Buffer is a Uint8Array view over a possibly-larger, possibly-shared
+ * backing store, which is not assignable to BodyInit. Copy out the exact bytes.
+ */
+export function toArrayBuffer(view: Uint8Array): ArrayBuffer {
+  const out = new ArrayBuffer(view.byteLength)
+  new Uint8Array(out).set(view)
+  return out
+}
+
 export class ApiError extends Error {
   constructor(
     public status: number,
@@ -352,6 +362,122 @@ export class DayOfWeekClient {
     return this.get(`/admin/proposals${qs ? `?${qs}` : ""}`)
   }
 
+  // ── Knowledge ─────────────────────────────────────────────────────────────
+
+  /**
+   * List the knowledge documents attached to an entity. `full` returns each
+   * document's whole content instead of an excerpt, which is what you want when
+   * mirroring an entity's sources into an external knowledge base.
+   */
+  async listKnowledge(opts: {
+    entity: string
+    full?: boolean
+    org?: string
+  }): Promise<any[]> {
+    const params = new URLSearchParams({ entity: opts.entity })
+    if (opts.full) params.set("full", "1")
+    if (opts.org) params.set("org", opts.org)
+    return this.get(`/knowledge?${params.toString()}`)
+  }
+
+  async getKnowledge(documentId: string, org?: string): Promise<any> {
+    const params = new URLSearchParams({ document: documentId })
+    if (org) params.set("org", org)
+    return this.get(`/knowledge?${params.toString()}`)
+  }
+
+  /** Semantic search across knowledge documents. */
+  async searchKnowledge(opts: {
+    query: string
+    entity?: string
+    types?: string[]
+    limit?: number
+    allOrgs?: boolean
+    org?: string
+  }): Promise<any> {
+    const params = new URLSearchParams({ q: opts.query })
+    if (opts.entity) params.set("entity", opts.entity)
+    if (opts.types?.length) params.set("types", opts.types.join(","))
+    if (opts.limit) params.set("limit", String(opts.limit))
+    if (opts.allOrgs) params.set("allOrgs", "1")
+    if (opts.org) params.set("org", opts.org)
+    return this.get(`/knowledge?${params.toString()}`)
+  }
+
+  /**
+   * Add a markdown knowledge note.
+   *
+   * Without `direct` this submits a proposal for human review — the default,
+   * and the only option non-admin tokens have. With `direct: true` an admin
+   * token writes the document immediately, skipping review. Ask the operator
+   * before doing that; see references/admin.md in the served skill.
+   */
+  async addKnowledge(input: {
+    entityId: string
+    title: string
+    content: string
+    sourceType?: string
+    sourceUrl?: string
+    sourceDescription?: string
+    confidence?: number
+    sourceAgent?: string
+    direct?: boolean
+    org?: string
+  }): Promise<any> {
+    return this.post("/knowledge", input)
+  }
+
+  /**
+   * Attach a binary source (PDF, DOCX, XLSX, …) to an entity. Admin only.
+   *
+   * Three hops: ask for an upload URL, send the bytes straight to Convex
+   * storage, then register the resulting storageId. The bytes never pass
+   * through function arguments, so file size isn't bounded by an arg limit.
+   */
+  async attachKnowledgeFile(input: {
+    entityId: string
+    /** Raw file bytes. Buffer callers: pass `toArrayBuffer(buf)` below. */
+    data: ArrayBuffer
+    fileName: string
+    mimeType: string
+    sourceType?: string
+    sourceUrl?: string
+    sourceDescription?: string
+    org?: string
+  }): Promise<any> {
+    const { uploadUrl } = await this.post("/knowledge/file", {
+      entityId: input.entityId,
+      org: input.org,
+    })
+
+    const byteSize = input.data.byteLength
+    const uploadRes = await fetch(uploadUrl, {
+      method: "POST",
+      headers: { "Content-Type": input.mimeType },
+      body: input.data,
+    })
+    if (!uploadRes.ok) {
+      throw new ApiError(
+        uploadRes.status,
+        `Upload to storage failed: ${uploadRes.status} ${uploadRes.statusText}`,
+      )
+    }
+    const uploaded = (await uploadRes.json()) as { storageId?: string }
+    if (!uploaded.storageId) throw new Error("Storage upload returned no storageId")
+
+    return this.put("/knowledge/file", {
+      entityId: input.entityId,
+      org: input.org,
+      storageId: uploaded.storageId,
+      fileName: input.fileName,
+      mimeType: input.mimeType,
+      byteSize,
+      sourceType: input.sourceType,
+      sourceUrl: input.sourceUrl,
+      sourceDescription: input.sourceDescription,
+    })
+  }
+
   // ── Skill ─────────────────────────────────────────────────────────────────
 
   async getSkillBundle(name?: string): Promise<{ name: string; version: string; hash?: string; files: Array<{ path: string; content: string; sha256?: string }> }> {
@@ -376,6 +502,10 @@ export class DayOfWeekClient {
 
   private async post(path: string, body: unknown): Promise<any> {
     return this.request(path, { method: "POST", body: JSON.stringify(body) })
+  }
+
+  private async put(path: string, body: unknown): Promise<any> {
+    return this.request(path, { method: "PUT", body: JSON.stringify(body) })
   }
 
   private async patch(path: string, body: unknown): Promise<any> {
