@@ -257,46 +257,55 @@ export class DayOfWeekClient {
 
   // ── Read ──────────────────────────────────────────────────────────────────
 
-  async listEntities(opts?: { type?: string; parent?: string; limit?: number }): Promise<any[]> {
+  // Every read endpoint accepts ?org=<slug|id> for admin tokens. Exposing it as
+  // --org is what keeps admins from dropping to curl for cross-org reads.
+
+  async listEntities(opts?: { type?: string; parent?: string; limit?: number; org?: string }): Promise<any[]> {
     const params = new URLSearchParams()
     if (opts?.type) params.set("type", opts.type)
     if (opts?.parent) params.set("parent", opts.parent)
     if (opts?.limit) params.set("limit", String(opts.limit))
+    if (opts?.org) params.set("org", opts.org)
     const qs = params.toString()
     return this.get(`/entities${qs ? `?${qs}` : ""}`)
   }
 
-  async getEntity(entityId: string): Promise<any> {
-    return this.get(`/entities/${entityId}`)
+  async getEntity(entityId: string, org?: string): Promise<any> {
+    const qs = org ? `?org=${encodeURIComponent(org)}` : ""
+    return this.get(`/entities/${entityId}${qs}`)
   }
 
-  async listProduce(opts?: { entity?: string; limit?: number }): Promise<any[]> {
+  async listProduce(opts?: { entity?: string; limit?: number; org?: string }): Promise<any[]> {
     const params = new URLSearchParams()
     if (opts?.entity) params.set("entity", opts.entity)
     if (opts?.limit) params.set("limit", String(opts.limit))
+    if (opts?.org) params.set("org", opts.org)
     const qs = params.toString()
     return this.get(`/produce${qs ? `?${qs}` : ""}`)
   }
 
-  async listContacts(opts?: { entity?: string; limit?: number }): Promise<any[]> {
+  async listContacts(opts?: { entity?: string; limit?: number; org?: string }): Promise<any[]> {
     const params = new URLSearchParams()
     if (opts?.entity) params.set("entity", opts.entity)
     if (opts?.limit) params.set("limit", String(opts.limit))
+    if (opts?.org) params.set("org", opts.org)
     const qs = params.toString()
     return this.get(`/contacts${qs ? `?${qs}` : ""}`)
   }
 
-  async listEntityTypes(): Promise<any[]> {
-    return this.get("/entity-types")
+  async listEntityTypes(org?: string): Promise<any[]> {
+    const qs = org ? `?org=${encodeURIComponent(org)}` : ""
+    return this.get(`/entity-types${qs}`)
   }
 
-  async searchCatalog(opts?: { search?: string; parent?: string; type?: string; includeCategories?: boolean; limit?: number }): Promise<any[]> {
+  async searchCatalog(opts?: { search?: string; parent?: string; type?: string; includeCategories?: boolean; limit?: number; org?: string }): Promise<any[]> {
     const params = new URLSearchParams()
     if (opts?.search) params.set("search", opts.search)
     if (opts?.parent) params.set("parent", opts.parent)
     if (opts?.type) params.set("type", opts.type)
     if (opts?.includeCategories) params.set("includeCategories", "true")
     if (opts?.limit) params.set("limit", String(opts.limit))
+    if (opts?.org) params.set("org", opts.org)
     const qs = params.toString()
     return this.get(`/catalog${qs ? `?${qs}` : ""}`)
   }
@@ -360,6 +369,72 @@ export class DayOfWeekClient {
     if (opts?.limit) params.set("limit", String(opts.limit))
     const qs = params.toString()
     return this.get(`/admin/proposals${qs ? `?${qs}` : ""}`)
+  }
+
+  // ── Produce import (admin) ────────────────────────────────────────────────
+
+  /**
+   * Direct produce entry — creates real Creator rows, not proposals.
+   *
+   * With `dryRun` the server runs the whole import and rolls it back, so the
+   * operator approves the server's verdict instead of a reconstruction of it.
+   */
+  async importProduce(input: {
+    entityId: string
+    items: unknown[]
+    dryRun?: boolean
+    skipExistingNames?: boolean
+    org?: string
+  }): Promise<any> {
+    return this.post("/produce/import", input)
+  }
+
+  /** Recipe ingredients still standing in for something vaguer. */
+  async listImpreciseIngredients(entityId: string, org?: string): Promise<any> {
+    const params = new URLSearchParams({ entity: entityId })
+    if (org) params.set("org", org)
+    return this.get(`/produce/ingredients?${params.toString()}`)
+  }
+
+  /** Point an imprecise ingredient at what it actually is. */
+  async refineIngredient(input: {
+    processInputId: string
+    catalogConceptId?: string
+    materialId?: string
+    role?: string
+    qty?: number
+    unitCode?: string
+    stillImprecise?: boolean
+    org?: string
+  }): Promise<any> {
+    return this.patch("/produce/ingredients", input)
+  }
+
+  /**
+   * Grow the shared produce catalog. Admin only — every customer sees these
+   * concepts, so adding one is a platform decision, not a per-import shortcut.
+   */
+  async createCatalogConcepts(input: { concepts: unknown[]; org?: string }): Promise<any> {
+    return this.post("/catalog/concepts", input)
+  }
+
+  /** Area sources, metadata only, newest first — the freshness evidence. */
+  async listBrainSources(areaId: string): Promise<any> {
+    return this.get(`/brain/sources?area=${encodeURIComponent(areaId)}`)
+  }
+
+  /** Entities with an active customer role and no investor/partner/producer role. */
+  async adminCustomersOnly(): Promise<any> {
+    return this.get("/admin/customers-only")
+  }
+
+  /** Tips mailed to press@mail.dayofweek.com, read by the press-scan skill. */
+  async adminPressInbox(opts?: { since?: string; limit?: number }): Promise<any> {
+    const params = new URLSearchParams()
+    if (opts?.since) params.set("since", opts.since)
+    if (opts?.limit) params.set("limit", String(opts.limit))
+    const qs = params.toString()
+    return this.get(`/press-inbox${qs ? `?${qs}` : ""}`)
   }
 
   // ── Knowledge ─────────────────────────────────────────────────────────────
@@ -476,6 +551,111 @@ export class DayOfWeekClient {
       sourceUrl: input.sourceUrl,
       sourceDescription: input.sourceDescription,
     })
+  }
+
+  // ── Datasets ──────────────────────────────────────────────────────────────
+  // The server owns the catalog: which datasets exist, what they are called,
+  // and who may read them. This client is deliberately name-blind — discovery
+  // happens at runtime so the open-source CLI reveals nothing about the
+  // platform's product surfaces.
+
+  async listDatasets(org?: string): Promise<{ datasets: Array<{ name: string; description: string; params: string[] }> }> {
+    const qs = org ? `?org=${encodeURIComponent(org)}` : ""
+    return this.get(`/datasets${qs}`)
+  }
+
+  async readDataset(name: string, opts?: { limit?: number; org?: string }): Promise<any> {
+    const params = new URLSearchParams()
+    if (opts?.limit) params.set("limit", String(opts.limit))
+    if (opts?.org) params.set("org", opts.org)
+    const qs = params.toString()
+    return this.get(`/datasets/${encodeURIComponent(name)}${qs ? `?${qs}` : ""}`)
+  }
+
+  // ── Feedback backlog ──────────────────────────────────────────────────────
+  // Token scopes apply: read:feedback for the GETs, write:feedback to comment,
+  // admin:feedback for claim/status/priority. backOffice users have them all.
+
+  async listFeedback(opts?: {
+    status?: string
+    priority?: string
+    category?: string
+    limit?: number
+  }): Promise<{ items: any[] }> {
+    const params = new URLSearchParams()
+    if (opts?.status) params.set("status", opts.status)
+    if (opts?.priority) params.set("priority", opts.priority)
+    if (opts?.category) params.set("category", opts.category)
+    if (opts?.limit) params.set("limit", String(opts.limit))
+    const qs = params.toString()
+    return this.get(`/feedback${qs ? `?${qs}` : ""}`)
+  }
+
+  async getFeedbackItem(itemId: string): Promise<any> {
+    return this.get(`/feedback/${encodeURIComponent(itemId)}`)
+  }
+
+  /** Top-N from the heuristic prioritizer — "what should I work on next?". */
+  async feedbackRecommendations(limit?: number): Promise<{ recommendations: any[] }> {
+    const qs = limit ? `?limit=${limit}` : ""
+    return this.get(`/feedback/ai-recommendations${qs}`)
+  }
+
+  async claimFeedbackItem(itemId: string): Promise<any> {
+    return this.post(`/feedback/${encodeURIComponent(itemId)}/claim`, {})
+  }
+
+  async commentOnFeedbackItem(itemId: string, body: string): Promise<any> {
+    return this.post(`/feedback/${encodeURIComponent(itemId)}/comments`, { body })
+  }
+
+  async updateFeedbackItem(
+    itemId: string,
+    updates: { status?: string; priority?: string; rejectedReason?: string },
+  ): Promise<any> {
+    return this.patch(`/feedback/${encodeURIComponent(itemId)}`, updates)
+  }
+
+  // ── Customer emails (admin only) ──────────────────────────────────────────
+  // Sending is gated on explicit human approval by the skill, not by the API.
+
+  async listEmailThreads(opts?: {
+    status?: string
+    since?: string
+    customer?: string
+    limit?: number
+    org?: string
+  }): Promise<any> {
+    const params = new URLSearchParams()
+    if (opts?.status) params.set("status", opts.status)
+    if (opts?.since) params.set("since", opts.since)
+    if (opts?.customer) params.set("customer", opts.customer)
+    if (opts?.limit) params.set("limit", String(opts.limit))
+    if (opts?.org) params.set("org", opts.org)
+    const qs = params.toString()
+    return this.get(`/emails${qs ? `?${qs}` : ""}`)
+  }
+
+  async getEmailThread(threadKey: string): Promise<any> {
+    return this.get(`/emails/${encodeURIComponent(threadKey)}`)
+  }
+
+  async replyToEmailThread(
+    threadKey: string,
+    input: { message: string; subject?: string; to?: string; cc?: string[]; quote?: boolean },
+  ): Promise<any> {
+    return this.post(`/emails/${encodeURIComponent(threadKey)}/reply`, input)
+  }
+
+  async composeEmail(input: {
+    entityId?: string
+    inbox?: string
+    to: string
+    cc?: string[]
+    subject: string
+    message: string
+  }): Promise<any> {
+    return this.post("/emails/compose", input)
   }
 
   // ── Skill ─────────────────────────────────────────────────────────────────
