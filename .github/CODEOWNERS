@@ -1,0 +1,9 @@
+# Alle endringer i dette repoet krever godkjenning fra @dayofweek/main-pushers
+# (Øyvind Brekkhus Sandåker + Erik Nergaard).
+#
+# Håndheves av branch-rulesetet "protect main":
+#   Require a pull request before merging → Require review from Code Owners.
+#
+# Teamet må ha write-tilgang på repoet for at denne regelen skal være gyldig.
+
+* @dayofweek/main-pushers
