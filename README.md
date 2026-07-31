@@ -111,6 +111,55 @@ immediately, so treat them as something you do when a person has asked for that
 specific document — not as the normal path. The server rejects them for
 non-admin tokens.
 
+## Datasets
+
+The platform offers additional read-only datasets beyond entities and
+knowledge. The catalog is server-owned and discovered at runtime — what
+`data list` returns is exactly what your credential may read.
+
+```bash
+dcli data list --json
+dcli data get <dataset> --limit 100 --json
+```
+
+Responses are `{ dataset, total, truncated, rows }`. The CLI has no built-in
+dataset names; new datasets appear in the listing without a CLI update.
+
+## Feedback backlog
+
+The customer feedback backlog that humans and coding agents work together.
+
+```bash
+dcli feedback next --json                    # what should I work on next
+dcli feedback list --status backlog --json
+dcli feedback show <itemId> --json
+dcli feedback claim <itemId> --json          # signal that you picked it up
+dcli feedback comment <itemId> --body "Fixed in #482"
+dcli feedback status <itemId> --status shipped
+```
+
+Access follows the token's scopes: `read:feedback` for the reads,
+`write:feedback` to comment, `admin:feedback` for claim/status/priority.
+Day of Week staff hold all three implicitly.
+
+## Customer emails (staff)
+
+Mail sent to a customer's own inbox address becomes a thread you can answer.
+The commands appear once `dcli auth status` has cached your admin role.
+
+```bash
+dcli emails list --status needs_reply --json
+dcli emails show <threadKey> --json
+dcli emails reply <threadKey> --message "..." --approved
+dcli emails compose --entity <entityId> --to person@example.com \
+  --subject "..." --message "..." --approved
+```
+
+`reply` and `compose` refuse to run without `--approved`. Sending mail as a
+customer is irreversible and outward-facing, so it cannot happen as a side
+effect of reading the inbox — a person approves the exact text first, and
+`--approved` records that they did.
+
 ## Legacy platform commands
 
 Existing read/proposal workflows remain compatible:
@@ -135,10 +184,30 @@ Development commands:
 ```bash
 npm install
 npm test
-npm run build
+npm run build            # tsc + the dependency-free bundle
+npm run build:bundle     # just dist/bundle/dcli.cjs
 npm run standalone:build
 npm run standalone:smoke
 ```
+
+### What gets published
+
+`npm run build` produces two runnable forms, and both ship:
+
+- **`dist/bin/dcli.js`** — the normal entry point, the one `bin` points at. It
+  imports `commander` and `open` from `node_modules`, which is exactly right
+  when npm installed the package.
+- **`dist/bundle/dcli.cjs`** — the same CLI with its dependencies compiled in,
+  runnable straight from an unpacked tarball.
+
+The bundle exists for consumers that unpack the tarball themselves instead of
+installing it, the Day of Week desktop app being the one that matters: it fetches
+the published package and runs it with Electron's Node, so a customer with no
+`node` and no `npm` still gets a working `dcli`. Without the bundle that install
+starts and immediately fails on a missing `commander`.
+
+Keep both. Dropping `dist/bundle/` from `files` silently breaks the desktop app's
+dcli updates.
 
 ## License
 

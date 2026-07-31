@@ -253,6 +253,14 @@ brain
 const brainSource = brain.command("source").description("Work with original shared files and recordings")
 
 brainSource
+  .command("list")
+  .description("List an area's sources, newest first (metadata only)")
+  .requiredOption("--area <areaId>", "Area to inventory")
+  .action(async (opts: { area: string }) => {
+    output(await getClient().listBrainSources(opts.area))
+  })
+
+brainSource
   .command("get <uri>")
   .description("Read source metadata and derived text")
   .action(async (uri: string) => {
@@ -341,6 +349,7 @@ read
   .option("--type <entityType>", "Filter by type (Farm, Producer, Restaurant, ...)")
   .option("--parent <entityId>", "List children of an entity")
   .option("--limit <count>", "Max results", parseInt)
+  .option("--org <org>", "Organization slug or id (admin only)")
   .action(async (opts) => {
     const client = getClient()
     const result = await client.listEntities(opts)
@@ -350,9 +359,10 @@ read
 read
   .command("entity <entityId>")
   .description("Get entity details")
-  .action(async (entityId: string) => {
+  .option("--org <org>", "Organization slug or id (admin only)")
+  .action(async (entityId: string, opts) => {
     const client = getClient()
-    const result = await client.getEntity(entityId)
+    const result = await client.getEntity(entityId, opts.org)
     output(result)
   })
 
@@ -361,6 +371,7 @@ read
   .description("List produce profiles")
   .option("--entity <entityId>", "Filter by entity")
   .option("--limit <count>", "Max results", parseInt)
+  .option("--org <org>", "Organization slug or id (admin only)")
   .action(async (opts) => {
     const client = getClient()
     const result = await client.listProduce(opts)
@@ -372,6 +383,7 @@ read
   .description("List contacts and memberships")
   .option("--entity <entityId>", "Filter by entity")
   .option("--limit <count>", "Max results", parseInt)
+  .option("--org <org>", "Organization slug or id (admin only)")
   .action(async (opts) => {
     const client = getClient()
     const result = await client.listContacts(opts)
@@ -381,9 +393,10 @@ read
 read
   .command("entity-types")
   .description("List available entity types")
-  .action(async () => {
+  .option("--org <org>", "Organization slug or id (admin only)")
+  .action(async (opts) => {
     const client = getClient()
-    const result = await client.listEntityTypes()
+    const result = await client.listEntityTypes(opts.org)
     output(result)
   })
 
@@ -395,6 +408,7 @@ read
   .option("--type <nodeType>", "Filter by type (category, produce, variety)")
   .option("--include-categories", "Include non-selectable categories in results")
   .option("--limit <count>", "Max results", parseInt)
+  .option("--org <org>", "Organization slug or id (admin only)")
   .action(async (opts) => {
     const client = getClient()
     const result = await client.searchCatalog(opts)
@@ -911,6 +925,123 @@ skill
     if (!installed) process.exitCode = 2
   })
 
+// ── Data Commands ────────────────────────────────────────────────────────────
+//
+// Generic, name-blind reads of platform datasets. The server's catalog decides
+// what exists and what the caller may see — this CLI ships no dataset names,
+// so new platform surfaces appear in `data list` without a CLI release.
+
+const data = program.command("data").description("Read platform datasets the server offers you")
+
+data
+  .command("list")
+  .description("List the datasets your credential may read")
+  .option("--org <org>", "Organization slug or id (admin only)")
+  .action(async (opts) => {
+    const client = getClient()
+    output(await client.listDatasets(opts.org))
+  })
+
+data
+  .command("get <dataset>")
+  .description("Read one dataset's rows (names come from `data list`)")
+  .option("--limit <count>", "Max rows (default 50, max 200)", parseInt)
+  .option("--org <org>", "Organization slug or id (admin only)")
+  .action(async (dataset: string, opts) => {
+    const client = getClient()
+    output(await client.readDataset(dataset, { limit: opts.limit, org: opts.org }))
+  })
+
+// ── Feedback Commands ────────────────────────────────────────────────────────
+//
+// The customer feedback backlog. Scope-gated rather than admin-gated:
+// read:feedback for the reads, write:feedback to comment, admin:feedback for
+// claim/status/priority. backOffice users implicitly hold every scope, so the
+// group stays visible and the endpoint decides what the caller may do.
+
+const feedback = program
+  .command("feedback")
+  .description("Read and work the customer feedback backlog")
+
+feedback
+  .command("list")
+  .description("List backlog items")
+  .option("--status <status>", "backlog | planned | in_progress | shipped | rejected | new")
+  .option("--priority <priority>", "urgent | high | medium | low")
+  .option("--category <category>", "Filter by category, e.g. studio")
+  .option("--limit <count>", "Max results", parseInt)
+  .action(async (opts) => {
+    const client = getClient()
+    output(await client.listFeedback({
+      status: opts.status,
+      priority: opts.priority,
+      category: opts.category,
+      limit: opts.limit,
+    }))
+  })
+
+feedback
+  .command("next")
+  .description("What should I work on next — the prioritizer's top picks")
+  .option("--limit <count>", "How many recommendations", parseInt)
+  .action(async (opts) => {
+    const client = getClient()
+    output(await client.feedbackRecommendations(opts.limit))
+  })
+
+feedback
+  .command("show <itemId>")
+  .description("Show one backlog item in full")
+  .action(async (itemId: string) => {
+    const client = getClient()
+    output(await client.getFeedbackItem(itemId))
+  })
+
+feedback
+  .command("claim <itemId>")
+  .description("Claim an item so humans see it is being worked on")
+  .action(async (itemId: string) => {
+    const client = getClient()
+    output(await client.claimFeedbackItem(itemId))
+  })
+
+feedback
+  .command("comment <itemId>")
+  .description("Add a comment to a backlog item")
+  .option("--body <text>", "Comment text")
+  .option("--file <path>", "Read the comment from a file (- for stdin)")
+  .action(async (itemId: string, opts) => {
+    let body: string
+    if (opts.body) {
+      body = String(opts.body)
+    } else if (opts.file) {
+      body = opts.file === "-" ? readFileSync(0, "utf8") : readFileSync(opts.file, "utf8")
+    } else {
+      throw new Error("Provide --body or --file")
+    }
+    if (!body.trim()) throw new Error("Comment is empty")
+    const client = getClient()
+    output(await client.commentOnFeedbackItem(itemId, body))
+  })
+
+feedback
+  .command("status <itemId>")
+  .description("Set status and/or priority on a backlog item")
+  .option("--status <status>", "backlog | planned | in_progress | shipped | rejected")
+  .option("--priority <priority>", "urgent | high | medium | low")
+  .option("--rejected-reason <text>", "Why it was rejected (with --status rejected)")
+  .action(async (itemId: string, opts) => {
+    if (!opts.status && !opts.priority) {
+      throw new Error("Provide --status and/or --priority")
+    }
+    const client = getClient()
+    output(await client.updateFeedbackItem(itemId, {
+      status: opts.status,
+      priority: opts.priority,
+      rejectedReason: opts.rejectedReason,
+    }))
+  })
+
 // ── Admin Commands ───────────────────────────────────────────────────────────
 //
 // These are admin-only. They're registered as hidden subcommands when the
@@ -965,6 +1096,235 @@ function registerAdminCommands() {
       })
       output(result)
     })
+
+  // ── Assortment import ──────────────────────────────────────────────────────
+  //
+  // These write real Creator rows rather than proposals, so the operator
+  // approves the parsed result first. --dry-run rehearses the whole import
+  // server-side and rolls it back; that response is what the review is built
+  // from. Writing requires --approved for the same reason email does.
+
+  const produce = program
+    .command("produce", { hidden: true })
+    .description("Assortment import and recipe refinement (DoW staff)")
+
+  produce
+    .command("import")
+    .description("Import a producer's items into Creator. Requires --dry-run or --approved")
+    .requiredOption("--file <path>", "JSON payload: { entityId, items[] } (- for stdin)")
+    .option("--dry-run", "Rehearse server-side and roll back — build the review from this")
+    .option("--skip-existing-names", "Skip items whose displayName already exists")
+    .option("--approved", "The operator approved the dry-run result")
+    .option("--org <org>", "Organization slug or id")
+    .action(async (opts) => {
+      if (!opts.dryRun && !opts.approved) {
+        throw new Error(
+          "Refusing to write: run with --dry-run first, show the operator the result, " +
+          "then repeat with --approved. This creates real Creator rows, not proposals.",
+        )
+      }
+      const raw = opts.file === "-" ? readFileSync(0, "utf8") : readFileSync(opts.file, "utf8")
+      const payload = JSON.parse(raw)
+      if (!payload?.entityId || !Array.isArray(payload.items)) {
+        throw new Error("Payload needs { entityId, items: [...] }")
+      }
+      const client = getClient()
+      output(await client.importProduce({
+        entityId: payload.entityId,
+        items: payload.items,
+        dryRun: Boolean(opts.dryRun),
+        skipExistingNames: opts.skipExistingNames ?? payload.skipExistingNames,
+        org: opts.org ?? payload.org,
+      }))
+    })
+
+  produce
+    .command("add-concepts")
+    .description("Add concepts to the shared produce catalog. Requires --approved")
+    .requiredOption("--file <path>", "JSON: { concepts: [...] } or a bare array (- for stdin)")
+    .option("--approved", "The operator approved these concepts")
+    .option("--org <org>", "Organization slug or id")
+    .action(async (opts) => {
+      if (!opts.approved) {
+        throw new Error(
+          "Refusing to write: the produce catalog is shared by every customer. " +
+          "Show the operator the concepts you want to add, then repeat with --approved.",
+        )
+      }
+      const raw = opts.file === "-" ? readFileSync(0, "utf8") : readFileSync(opts.file, "utf8")
+      const parsed = JSON.parse(raw)
+      const concepts = Array.isArray(parsed) ? parsed : parsed?.concepts
+      if (!Array.isArray(concepts) || concepts.length === 0) {
+        throw new Error("Payload needs a non-empty `concepts` array")
+      }
+      const client = getClient()
+      output(await client.createCatalogConcepts({ concepts, org: opts.org ?? parsed?.org }))
+    })
+
+  produce
+    .command("ingredients")
+    .description("Recipe ingredients still standing in for something vaguer")
+    .requiredOption("--entity <entityId>", "Producer entity")
+    .option("--org <org>", "Organization slug or id")
+    .action(async (opts) => {
+      const client = getClient()
+      output(await client.listImpreciseIngredients(opts.entity, opts.org))
+    })
+
+  produce
+    .command("refine")
+    .description("Point an imprecise ingredient at what it actually is")
+    .requiredOption("--process-input <id>", "processInputId from `produce ingredients`")
+    .option("--concept <catalogConceptId>", "What it actually is")
+    .option("--material <materialId>", "Material node instead of a catalog concept")
+    .option("--role <role>", "e.g. seasoning, base")
+    .option("--qty <n>", "Quantity", parseFloat)
+    .option("--unit <unitCode>", "Unit code")
+    .option("--still-imprecise", "Narrowed but not resolved — keeps it on the worklist")
+    .option("--org <org>", "Organization slug or id")
+    .action(async (opts) => {
+      if (!opts.concept && !opts.material) {
+        throw new Error("Provide --concept or --material")
+      }
+      const client = getClient()
+      output(await client.refineIngredient({
+        processInputId: opts.processInput,
+        catalogConceptId: opts.concept,
+        materialId: opts.material,
+        role: opts.role,
+        qty: opts.qty,
+        unitCode: opts.unit,
+        stillImprecise: Boolean(opts.stillImprecise),
+        org: opts.org,
+      }))
+    })
+
+  admin
+    .command("customers-only")
+    .description("Entities with a customer role and no investor/partner/producer role")
+    .action(async () => {
+      const client = getClient()
+      output(await client.adminCustomersOnly())
+    })
+
+  admin
+    .command("press-inbox")
+    .description("Tips mailed to press@mail.dayofweek.com (Press Radar)")
+    .option("--since <date>", "ISO date or epoch ms (default 45 days back)")
+    .option("--limit <count>", "Max emails (max 200)", parseInt)
+    .action(async (opts) => {
+      const client = getClient()
+      output(await client.adminPressInbox({ since: opts.since, limit: opts.limit }))
+    })
+
+  // ── Customer emails ────────────────────────────────────────────────────────
+  //
+  // Mail sent to a customer's own inbox address (<slug>@mail.dayofweek.com)
+  // becomes a thread the agent can answer. Reading is free; sending is not:
+  // `reply` and `compose` refuse to run without --approved, so an agent cannot
+  // mail a customer as a side effect of "check the inbox". The human approves
+  // the exact text first — that rule lives in the skill; --approved is the
+  // mechanical backstop for it.
+
+  const emails = program
+    .command("emails", { hidden: true })
+    .description("Customer email threads — read, reply, compose (DoW staff)")
+
+  const APPROVAL_REQUIRED =
+    "Refusing to send: pass --approved once the human has approved this exact text. " +
+    "Never send an email the human has not seen."
+
+  emails
+    .command("list")
+    .description("List customer email threads")
+    .option("--status <status>", "needs_reply | manual_review | all (default all)")
+    .option("--since <date>", "ISO date (2026-07-01) or epoch ms; default 30 days back")
+    .option("--customer <entityId>", "One customer only")
+    .option("--limit <count>", "Max threads (default 50, max 200)", parseInt)
+    .option("--org <org>", "Organization slug or id")
+    .action(async (opts) => {
+      const client = getClient()
+      output(await client.listEmailThreads({
+        status: opts.status,
+        since: opts.since,
+        customer: opts.customer,
+        limit: opts.limit,
+        org: opts.org,
+      }))
+    })
+
+  emails
+    .command("show <threadKey>")
+    .description("Full thread: messages, attachments, and reply hints")
+    .action(async (threadKey: string) => {
+      const client = getClient()
+      output(await client.getEmailThread(threadKey))
+    })
+
+  emails
+    .command("reply <threadKey>")
+    .description("Reply in a thread. Requires --approved")
+    .option("--message <text>", "Plain-text reply body")
+    .option("--file <path>", "Read the body from a file (- for stdin)")
+    .option("--subject <text>", "Override the subject (defaults to Re: …)")
+    .option("--to <address>", "Override the recipient")
+    .option("--cc <addresses>", "Comma-separated cc list")
+    .option("--no-quote", "Do not quote the original underneath")
+    .option("--approved", "The human approved this exact text")
+    .action(async (threadKey: string, opts) => {
+      if (!opts.approved) throw new Error(APPROVAL_REQUIRED)
+      let message: string
+      if (opts.message) {
+        message = String(opts.message)
+      } else if (opts.file) {
+        message = opts.file === "-" ? readFileSync(0, "utf8") : readFileSync(opts.file, "utf8")
+      } else {
+        throw new Error("Provide --message or --file")
+      }
+      if (!message.trim()) throw new Error("Message is empty")
+      const client = getClient()
+      output(await client.replyToEmailThread(threadKey, {
+        message,
+        subject: opts.subject,
+        to: opts.to,
+        cc: splitList(opts.cc),
+        quote: opts.quote,
+      }))
+    })
+
+  emails
+    .command("compose")
+    .description("Start a new thread from a customer inbox. Requires --approved")
+    .option("--entity <entityId>", "Customer entity whose inbox sends the mail")
+    .option("--inbox <address>", "Inbox address instead of --entity")
+    .requiredOption("--to <address>", "Recipient")
+    .option("--cc <addresses>", "Comma-separated cc list")
+    .requiredOption("--subject <text>", "Subject line")
+    .option("--message <text>", "Plain-text body")
+    .option("--file <path>", "Read the body from a file (- for stdin)")
+    .option("--approved", "The human approved this exact text")
+    .action(async (opts) => {
+      if (!opts.approved) throw new Error(APPROVAL_REQUIRED)
+      if (!opts.entity && !opts.inbox) throw new Error("Provide --entity or --inbox")
+      let message: string
+      if (opts.message) {
+        message = String(opts.message)
+      } else if (opts.file) {
+        message = opts.file === "-" ? readFileSync(0, "utf8") : readFileSync(opts.file, "utf8")
+      } else {
+        throw new Error("Provide --message or --file")
+      }
+      if (!message.trim()) throw new Error("Message is empty")
+      const client = getClient()
+      output(await client.composeEmail({
+        entityId: opts.entity,
+        inbox: opts.inbox,
+        to: opts.to,
+        cc: splitList(opts.cc),
+        subject: opts.subject,
+        message,
+      }))
+    })
 }
 
 registerAdminCommands()
@@ -978,6 +1338,13 @@ async function readStdin(): Promise<string> {
     chunks.push(line)
   }
   return chunks.join("\n")
+}
+
+/** Parse a comma-separated CLI option into a trimmed list, or undefined. */
+function splitList(value?: string): string[] | undefined {
+  if (!value) return undefined
+  const items = String(value).split(",").map((entry) => entry.trim()).filter(Boolean)
+  return items.length ? items : undefined
 }
 
 function inferMimeType(path: string): string {
