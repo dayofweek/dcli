@@ -74,14 +74,14 @@ The legacy entity/proposal Agent Skill remains available through `dcli skill ins
 
 ### Shared skills
 
-Beyond the named bundles above, users can publish their own skills into a shared knowledge area. Anyone who can read the area — or, with `--visibility company`, anyone in the publishing area's organization — can then discover, install, and update the skill:
+Beyond the named bundles above, users can publish their own skills into a shared knowledge area. Anyone who can read the area — or, with `--visibility company`, anyone in the publishing area's organization — can then discover, install, and update the skill. Service administrators can additionally publish with `--visibility global`, making a skill a shared starter for every user of the service; the desktop app syncs global skills into managed wikis automatically.
 
 ```bash
 # Publish a local skill directory (name/version come from SKILL.md frontmatter)
 dcli skill publish --area <areaId> --dir .agents/skills/meeting-notes --visibility company
 
-# Discover: shared skills appear in the same listing as the named bundles
-dcli skill list --json
+# Discover: --shared adds skills shared with you to the bundle listing
+dcli skill list --shared --json
 
 # Install by canonical URI, or by name + area
 dcli skill install 'dayofweek://brain/<areaId>/skill/<skillId>'

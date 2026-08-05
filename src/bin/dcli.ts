@@ -945,8 +945,9 @@ function collectSkillFiles(dir: string): Array<{ path: string; content: string }
 
 skill
   .command("list")
-  .description("List installable skills: named bundles plus skills shared with you")
-  .action(async () => {
+  .description("List installable named skill bundles; --shared adds skills shared with you")
+  .option("--shared", "Include skills other users shared with you")
+  .action(async (opts: { shared?: boolean }) => {
     const client = getClient()
     type SkillListing = {
       name: string
@@ -955,42 +956,58 @@ skill
       source: "platform" | "shared"
       areaId?: string
       areaName?: string
-      visibility?: "area" | "company"
+      visibility?: "area" | "company" | "global"
       description?: string
       uri?: string
       updatedAt?: number
     }
+    // The bare listing stays exactly the named bundles: managed installers
+    // iterate it and fetch every entry by plain name, so shared skills (which
+    // resolve by URI) only appear when explicitly asked for.
     const listings: SkillListing[] = (await client.listSkillBundles()).map((bundle) => ({
       ...bundle,
       source: "platform" as const,
     }))
-    try {
-      for (const shared of await client.listSharedSkills()) {
-        listings.push({
-          name: shared.name,
-          version: shared.version,
-          hash: shared.hash,
-          source: "shared",
-          areaId: shared.areaId,
-          areaName: shared.areaName,
-          visibility: shared.visibility,
-          description: shared.description,
-          uri: shared.uri,
-          updatedAt: shared.updatedAt,
-        })
+    if (opts.shared) {
+      try {
+        for (const shared of await client.listSharedSkills()) {
+          listings.push({
+            name: shared.name,
+            version: shared.version,
+            hash: shared.hash,
+            source: "shared",
+            areaId: shared.areaId,
+            areaName: shared.areaName,
+            visibility: shared.visibility,
+            description: shared.description,
+            uri: shared.uri,
+            updatedAt: shared.updatedAt,
+          })
+        }
+      } catch (error) {
+        // Older servers or tokens without knowledge scopes have no shared-skill
+        // surface — the named bundles are still worth listing.
+        console.error(`Shared skills unavailable: ${error instanceof Error ? error.message : String(error)}`)
       }
-    } catch (error) {
-      // Older servers or tokens without knowledge scopes have no shared-skill
-      // surface — the named bundles are still worth listing.
-      console.error(`Shared skills unavailable: ${error instanceof Error ? error.message : String(error)}`)
     }
     output(listings.sort((left, right) => left.name.localeCompare(right.name)))
   })
 
 skill
-  .command("bundle <name>")
-  .description("Fetch and verify a named skill bundle for a managed installer")
-  .action(async (name: string) => output(validateSkillBundle(await getClient().getSkillBundle(name))))
+  .command("bundle <nameOrUri>")
+  .description("Fetch and verify a skill bundle (by name, or shared-skill URI) for a managed installer")
+  .action(async (nameOrUri: string) => {
+    if (nameOrUri.includes("://")) {
+      const resource = parseBrainResource(nameOrUri)
+      if (resource.resourceType !== "skill" || !resource.resourceId) throw new Error("A shared skill URI is required")
+      const shared = await getClient().getSharedSkill(resource.resourceId)
+      if (shared.areaId !== resource.areaId) throw new Error("Server returned a mismatched area")
+      // Emit the plain bundle shape managed installers expect.
+      output(validateSkillBundle({ name: shared.name, version: shared.version, hash: shared.hash, files: shared.files }))
+      return
+    }
+    output(validateSkillBundle(await getClient().getSkillBundle(nameOrUri)))
+  })
 
 skill
   .command("install [name]")
@@ -1015,11 +1032,13 @@ skill
   .requiredOption("--dir <path>", "Skill directory containing SKILL.md")
   .option("--name <name>", "Skill name (default: SKILL.md frontmatter, else the directory name)")
   .option("--skill-version <version>", "Version string (default: SKILL.md frontmatter version)")
-  .option("--visibility <visibility>", "Who can discover it: area (members only) or company (default: area)")
+  .option("--visibility <visibility>", "Who can discover it: area (members only), company, or global (admins; every user)")
   .option("--description <text>", "Short description shown in listings")
   .action(async (opts: { area: string; dir: string; name?: string; skillVersion?: string; visibility?: string; description?: string }) => {
     const visibility = (opts.visibility ?? "area").toLowerCase()
-    if (visibility !== "area" && visibility !== "company") throw new Error("Invalid --visibility: use area or company")
+    if (visibility !== "area" && visibility !== "company" && visibility !== "global") {
+      throw new Error("Invalid --visibility: use area, company, or global")
+    }
     const files = collectSkillFiles(opts.dir)
     const skillMd = files.find((file) => file.path === "SKILL.md")
     if (!skillMd) throw new Error("The skill directory must contain SKILL.md")

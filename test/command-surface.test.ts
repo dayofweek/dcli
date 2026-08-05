@@ -63,6 +63,7 @@ describe("documented v1 command surface", () => {
     expect(help("skill", "install")).toContain("--area")
     expect(help("skill", "status")).toContain("--check")
     expect(help("skill", "publish")).toContain("--visibility")
+    expect(help("skill", "list")).toContain("--shared")
   }, 60_000)
 
   // The server has always accepted an org on both proposal endpoints. While the

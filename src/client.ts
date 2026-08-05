@@ -687,7 +687,7 @@ export class DayOfWeekClient {
     name: string
     version: string
     description?: string
-    visibility: "area" | "company"
+    visibility: "area" | "company" | "global"
     files: Array<{ path: string; content: string }>
   }): Promise<SharedSkillSummary> {
     return this.post("/brain/skills", input)
@@ -829,8 +829,9 @@ export type SharedSkillSummary = {
   description?: string
   hash: string
   // "area" = the owning area's members; "company" = everyone in the owning
-  // area's organization.
-  visibility: "area" | "company"
+  // area's organization; "global" = every user of the service (published by
+  // service administrators as a shared starter library).
+  visibility: "area" | "company" | "global"
   revision: number
   fileCount: number
   byteSize: number
