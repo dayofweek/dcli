@@ -840,6 +840,6 @@ export type SharedSkillSummary = {
   updatedAt: number
 }
 
-export type SharedSkillBundle = Omit<SharedSkillSummary, "fileCount" | "byteSize"> & {
+export type SharedSkillBundle = SharedSkillSummary & {
   files: Array<{ path: string; content: string; sha256: string }>
 }
