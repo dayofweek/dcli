@@ -56,7 +56,14 @@ describe("documented v1 command surface", () => {
     expect(authHelp).toContain("status")
     expect(authHelp).toContain("logout")
     expect(help("brain", "source")).toContain("get")
-    expect(help("skill")).toContain("bundle")
+    const skillHelp = help("skill")
+    expect(skillHelp).toContain("bundle")
+    expect(skillHelp).toContain("publish")
+    expect(skillHelp).toContain("archive")
+    expect(help("skill", "install")).toContain("--area")
+    expect(help("skill", "status")).toContain("--check")
+    expect(help("skill", "publish")).toContain("--visibility")
+    expect(help("skill", "list")).toContain("--shared")
   }, 60_000)
 
   // The server has always accepted an org on both proposal endpoints. While the

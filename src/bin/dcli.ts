@@ -5,13 +5,14 @@ import { ApiError, DayOfWeekClient, toArrayBuffer } from "../client.js"
 import { getToken, getApiUrl, saveConfig, loadConfig, saveCredential, deleteCredential } from "../config.js"
 import { browserLogin } from "../auth/login.js"
 import { parseBrainResource } from "../uri.js"
-import { accessSync, constants, mkdirSync, readFileSync, existsSync, statSync, writeFileSync } from "node:fs"
+import { accessSync, constants, mkdirSync, readdirSync, readFileSync, existsSync, statSync, writeFileSync } from "node:fs"
 import { join, basename, resolve, relative, sep } from "node:path"
 import { homedir } from "node:os"
 import { createInterface } from "node:readline/promises"
 import pkg from "../../package.json" with { type: "json" }
 import { createHash } from "node:crypto"
-import { validateSkillBundle, writeSkillBundle } from "../skills.js"
+import { readInstalledSkill, validateSkillBundle, writeSkillBundle, type SkillBundle, type SkillOrigin } from "../skills.js"
+import type { SharedSkillBundle } from "../client.js"
 
 const program = new Command()
   .name("dcli")
@@ -847,59 +848,233 @@ function parseTarget(value: string | undefined): SkillTarget {
   return v
 }
 
+// A skill install/update can come from two origins: a named bundle served by
+// the platform, or a skill another user published into a shared knowledge
+// area ("shared"). Shared skills are addressed by a skill URI
+// (dayofweek://brain/<areaId>/skill/<skillId>) or by name together with
+// --area. The origin is recorded in `.dayofweek-skill.json` so updates and
+// `status --check` go back to the same place.
+type ResolvedSkillBundle = { bundle: SkillBundle; origin: SkillOrigin }
+
+function sharedToBundle(shared: SharedSkillBundle): ResolvedSkillBundle {
+  return {
+    bundle: { name: shared.name, version: shared.version, hash: shared.hash, files: shared.files },
+    origin: { source: "shared", skillId: shared.id, areaId: shared.areaId, uri: shared.uri },
+  }
+}
+
+async function fetchSkillByOrigin(
+  client: ReturnType<typeof getClient>,
+  nameOrUri: string | undefined,
+  areaId: string | undefined,
+): Promise<ResolvedSkillBundle> {
+  if (nameOrUri?.includes("://")) {
+    const resource = parseBrainResource(nameOrUri)
+    if (resource.resourceType !== "skill" || !resource.resourceId) throw new Error("A shared skill URI is required")
+    const shared = await client.getSharedSkill(resource.resourceId)
+    if (shared.areaId !== resource.areaId) throw new Error("Server returned a mismatched area")
+    return sharedToBundle(shared)
+  }
+  if (areaId) {
+    if (!nameOrUri) throw new Error("A skill name is required together with --area")
+    const match = (await client.listSharedSkills()).find(
+      (candidate) => candidate.areaId === areaId && candidate.name === nameOrUri,
+    )
+    if (!match) throw new Error("Shared skill not found in that area")
+    return sharedToBundle(await client.getSharedSkill(match.id))
+  }
+  return { bundle: await client.getSkillBundle(nameOrUri), origin: { source: "platform" } }
+}
+
+async function installOrUpdateSkill(
+  action: "install" | "update",
+  name: string | undefined,
+  opts: { dir?: string; target?: string; area?: string },
+): Promise<void> {
+  const client = getClient()
+  let resolved: ResolvedSkillBundle | undefined
+  if (action === "update" && !name && !opts.area && opts.dir) {
+    // Bare `skill update --dir …`: go back to wherever this install came from.
+    const installed = readInstalledSkill(opts.dir)
+    if (installed) {
+      resolved = installed.origin?.source === "shared"
+        ? sharedToBundle(await client.getSharedSkill(installed.origin.skillId))
+        : { bundle: await client.getSkillBundle(installed.name), origin: { source: "platform" } }
+    }
+  }
+  resolved = resolved ?? await fetchSkillByOrigin(client, name, opts.area)
+  const bundle = validateSkillBundle(resolved.bundle)
+  const dirs = resolveTargetDirs(parseTarget(opts.target), bundle.name, opts.dir)
+
+  const installations = []
+  for (const dir of dirs) {
+    const result = writeSkillBundle(bundle, dir, resolved.origin)
+    installations.push({ directory: dir, ...result })
+  }
+  output({
+    action,
+    bundle: bundle.name,
+    version: bundle.version,
+    hash: bundle.hash,
+    origin: resolved.origin.source,
+    ...(resolved.origin.source === "shared" ? { uri: resolved.origin.uri } : {}),
+    installations,
+  })
+}
+
+/** Read a skill directory into bundle files: relative paths, utf-8 content. */
+function collectSkillFiles(dir: string): Array<{ path: string; content: string }> {
+  const root = resolve(dir)
+  if (!existsSync(root) || !statSync(root).isDirectory()) throw new Error("Skill directory not found")
+  const files: Array<{ path: string; content: string }> = []
+  const walk = (current: string, prefix: string) => {
+    for (const entry of readdirSync(current, { withFileTypes: true })) {
+      // Hidden entries (including the .dayofweek-skill.json install manifest)
+      // and update-conflict artifacts never belong in a published bundle.
+      if (entry.name.startsWith(".") || /\.new(\.\d+)?$/.test(entry.name)) continue
+      if (entry.isSymbolicLink()) throw new Error("Symlinks are not allowed in a skill directory")
+      const full = join(current, entry.name)
+      const relativePath = prefix ? `${prefix}/${entry.name}` : entry.name
+      if (entry.isDirectory()) walk(full, relativePath)
+      else if (entry.isFile()) files.push({ path: relativePath, content: readFileSync(full, "utf8") })
+    }
+  }
+  walk(root, "")
+  return files.sort((left, right) => left.path.localeCompare(right.path))
+}
+
 skill
   .command("list")
-  .description("List authenticated named skill bundles")
-  .action(async () => output(await getClient().listSkillBundles()))
-
-skill
-  .command("bundle <name>")
-  .description("Fetch and verify a named skill bundle for a managed installer")
-  .action(async (name: string) => output(validateSkillBundle(await getClient().getSkillBundle(name))))
-
-skill
-  .command("install [name]")
-  .description("Install the agent skill (requires valid auth)")
-  .option("--dir <path>", "Custom install directory (overrides --target)")
-  .option("--target <target>", "Install target: agents, claude, or all (default: all)")
-  .action(async (name: string | undefined, opts) => {
+  .description("List installable named skill bundles; --shared adds skills shared with you")
+  .option("--shared", "Include skills other users shared with you")
+  .action(async (opts: { shared?: boolean }) => {
     const client = getClient()
-    const bundle = await client.getSkillBundle(name)
-    const target = parseTarget(opts.target)
-    const dirs = resolveTargetDirs(target, bundle.name, opts.dir)
-
-    const installations = []
-    for (const dir of dirs) {
-      const result = writeSkillBundle(bundle, dir)
-      installations.push({ directory: dir, ...result })
+    type SkillListing = {
+      name: string
+      version: string
+      hash: string
+      source: "platform" | "shared"
+      areaId?: string
+      areaName?: string
+      visibility?: "area" | "company" | "global"
+      description?: string
+      uri?: string
+      updatedAt?: number
     }
-    output({ action: "install", bundle: bundle.name, version: bundle.version, hash: bundle.hash, installations })
+    // The bare listing stays exactly the named bundles: managed installers
+    // iterate it and fetch every entry by plain name, so shared skills (which
+    // resolve by URI) only appear when explicitly asked for.
+    const listings: SkillListing[] = (await client.listSkillBundles()).map((bundle) => ({
+      ...bundle,
+      source: "platform" as const,
+    }))
+    if (opts.shared) {
+      try {
+        for (const shared of await client.listSharedSkills()) {
+          listings.push({
+            name: shared.name,
+            version: shared.version,
+            hash: shared.hash,
+            source: "shared",
+            areaId: shared.areaId,
+            areaName: shared.areaName,
+            visibility: shared.visibility,
+            description: shared.description,
+            uri: shared.uri,
+            updatedAt: shared.updatedAt,
+          })
+        }
+      } catch (error) {
+        // Older servers or tokens without knowledge scopes have no shared-skill
+        // surface — the named bundles are still worth listing.
+        console.error(`Shared skills unavailable: ${error instanceof Error ? error.message : String(error)}`)
+      }
+    }
+    output(listings.sort((left, right) => left.name.localeCompare(right.name)))
   })
 
 skill
-  .command("update [name]")
-  .description("Update the skill to the latest version")
+  .command("bundle <nameOrUri>")
+  .description("Fetch and verify a skill bundle (by name, or shared-skill URI) for a managed installer")
+  .action(async (nameOrUri: string) => {
+    if (nameOrUri.includes("://")) {
+      const resource = parseBrainResource(nameOrUri)
+      if (resource.resourceType !== "skill" || !resource.resourceId) throw new Error("A shared skill URI is required")
+      const shared = await getClient().getSharedSkill(resource.resourceId)
+      if (shared.areaId !== resource.areaId) throw new Error("Server returned a mismatched area")
+      // Emit the plain bundle shape managed installers expect.
+      output(validateSkillBundle({ name: shared.name, version: shared.version, hash: shared.hash, files: shared.files }))
+      return
+    }
+    output(validateSkillBundle(await getClient().getSkillBundle(nameOrUri)))
+  })
+
+skill
+  .command("install [name]")
+  .description("Install a skill by bundle name, shared-skill URI, or name + --area")
   .option("--dir <path>", "Custom install directory (overrides --target)")
   .option("--target <target>", "Install target: agents, claude, or all (default: all)")
-  .action(async (name: string | undefined, opts) => {
-    const client = getClient()
-    const bundle = await client.getSkillBundle(name)
-    const target = parseTarget(opts.target)
-    const dirs = resolveTargetDirs(target, bundle.name, opts.dir)
+  .option("--area <areaId>", "Install a shared skill from this area")
+  .action(async (name: string | undefined, opts) => installOrUpdateSkill("install", name, opts))
 
-    const installations = []
-    for (const dir of dirs) {
-      const result = writeSkillBundle(bundle, dir)
-      installations.push({ directory: dir, ...result })
+skill
+  .command("update [name]")
+  .description("Update a skill to the latest version from its origin")
+  .option("--dir <path>", "Custom install directory (overrides --target)")
+  .option("--target <target>", "Install target: agents, claude, or all (default: all)")
+  .option("--area <areaId>", "Update a shared skill from this area")
+  .action(async (name: string | undefined, opts) => installOrUpdateSkill("update", name, opts))
+
+skill
+  .command("publish")
+  .description("Share a skill directory to a knowledge area so teammates can install it")
+  .requiredOption("--area <areaId>", "Owning area (see: dcli brain list)")
+  .requiredOption("--dir <path>", "Skill directory containing SKILL.md")
+  .option("--name <name>", "Skill name (default: SKILL.md frontmatter, else the directory name)")
+  .option("--skill-version <version>", "Version string (default: SKILL.md frontmatter version)")
+  .option("--visibility <visibility>", "Who can discover it: area (members only), company, or global (admins; every user)")
+  .option("--description <text>", "Short description shown in listings")
+  .action(async (opts: { area: string; dir: string; name?: string; skillVersion?: string; visibility?: string; description?: string }) => {
+    const visibility = (opts.visibility ?? "area").toLowerCase()
+    if (visibility !== "area" && visibility !== "company" && visibility !== "global") {
+      throw new Error("Invalid --visibility: use area, company, or global")
     }
-    output({ action: "update", bundle: bundle.name, version: bundle.version, hash: bundle.hash, installations })
+    const files = collectSkillFiles(opts.dir)
+    const skillMd = files.find((file) => file.path === "SKILL.md")
+    if (!skillMd) throw new Error("The skill directory must contain SKILL.md")
+    const name = opts.name
+      ?? skillMd.content.match(/^name:\s*"?([a-z0-9][a-z0-9-]*)"?\s*$/m)?.[1]
+      ?? basename(resolve(opts.dir))
+    const version = opts.skillVersion ?? skillMd.content.match(/version:\s*"([^"]+)"/)?.[1] ?? "1.0.0"
+    validateSkillBundle({ name, version, files })
+    const result = await getClient().publishSharedSkill({
+      areaId: opts.area,
+      name,
+      version,
+      description: opts.description,
+      visibility,
+      files,
+    })
+    output({ action: "publish", ...result })
+  })
+
+skill
+  .command("archive <uri>")
+  .description("Archive a shared skill you own (removes it from listing and install)")
+  .action(async (uri: string) => {
+    const resource = parseBrainResource(uri)
+    if (resource.resourceType !== "skill" || !resource.resourceId) throw new Error("A shared skill URI is required")
+    const result = await getClient().archiveSharedSkill(resource.resourceId)
+    if (result.areaId !== resource.areaId) throw new Error("Server returned a mismatched area")
+    output({ action: "archive", ...result })
   })
 
 skill
   .command("status [name]")
-  .description("Check if the skill is installed")
+  .description("Check if the skill is installed; --check compares against its origin")
   .option("--dir <path>", "Custom install directory (overrides --target)")
   .option("--target <target>", "Check target: agents, claude, or all (default: all)")
+  .option("--check", "Also ask the server whether a newer version exists")
   .action(async (name: string | undefined, opts) => {
     const bundleName = name ?? "dayofweek-platform"
     const target = parseTarget(opts.target)
@@ -909,16 +1084,46 @@ skill
         ? [join(homedir(), ".agents", "skills", bundleName), join(homedir(), ".claude", "skills", bundleName)]
         : resolveTargetDirs(target, bundleName)
 
-    const installations: Array<{ installed: boolean; directory: string; name: string; version?: string; sha256?: string }> = []
+    let platformBundles: Array<{ name: string; version: string; hash: string }> | undefined
+    const installations: Array<Record<string, unknown>> = []
     for (const dir of dirs) {
       const skillPath = join(dir, "SKILL.md")
       if (!existsSync(skillPath)) {
         installations.push({ installed: false, directory: dir, name: bundleName })
         continue
       }
+      const metadata = readInstalledSkill(dir)
       const content = readFileSync(skillPath, "utf-8")
       const versionMatch = content.match(/version:\s*"([^"]+)"/)
-      installations.push({ installed: true, directory: dir, name: bundleName, version: versionMatch?.[1] ?? "unknown", sha256: sha256(content) })
+      const entry: Record<string, unknown> = {
+        installed: true,
+        directory: dir,
+        name: metadata?.name ?? bundleName,
+        version: metadata?.version ?? versionMatch?.[1] ?? "unknown",
+        sha256: sha256(content),
+        origin: metadata?.origin?.source ?? "platform",
+      }
+      if (opts.check) {
+        try {
+          if (metadata?.origin?.source === "shared") {
+            const latest = await getClient().getSharedSkill(metadata.origin.skillId)
+            entry.latestVersion = latest.version
+            entry.upToDate = metadata.hash === latest.hash
+          } else {
+            platformBundles ??= await getClient().listSkillBundles()
+            const latest = platformBundles.find((candidate) => candidate.name === entry.name)
+            if (latest) {
+              entry.latestVersion = latest.version
+              // Pre-origin installs have no recorded manifest hash; fall back
+              // to comparing the declared versions.
+              entry.upToDate = metadata ? metadata.hash === latest.hash : latest.version === entry.version
+            }
+          }
+        } catch (error) {
+          entry.checkError = error instanceof Error ? error.message : String(error)
+        }
+      }
+      installations.push(entry)
     }
     const installed = installations.some((entry) => entry.installed)
     output({ installed, bundle: bundleName, installations })
