@@ -668,6 +668,35 @@ export class DayOfWeekClient {
     return this.get("/skill?list=1")
   }
 
+  // ── Shared skills ─────────────────────────────────────────────────────────
+  //
+  // Skills other users published into shared knowledge areas. Discovery is
+  // server-owned, like the named bundles above: the CLI ships no skill names,
+  // and the server decides which skills this device's user may see.
+
+  async listSharedSkills(): Promise<SharedSkillSummary[]> {
+    return this.get("/brain/skills")
+  }
+
+  async getSharedSkill(skillId: string): Promise<SharedSkillBundle> {
+    return this.get(`/brain/skills/${encodeURIComponent(skillId)}`)
+  }
+
+  async publishSharedSkill(input: {
+    areaId: string
+    name: string
+    version: string
+    description?: string
+    visibility: "area" | "company"
+    files: Array<{ path: string; content: string }>
+  }): Promise<SharedSkillSummary> {
+    return this.post("/brain/skills", input)
+  }
+
+  async archiveSharedSkill(skillId: string): Promise<SharedSkillSummary> {
+    return this.delete(`/brain/skills/${encodeURIComponent(skillId)}`)
+  }
+
   // ── Schema ────────────────────────────────────────────────────────────────
 
   async getSchema(): Promise<any> {
@@ -790,3 +819,26 @@ export type BrainResolvedResource =
   | { resourceType: "area"; area: BrainArea }
   | { resourceType: "note"; note: BrainNote }
   | { resourceType: "source"; source: BrainSource }
+
+export type SharedSkillSummary = {
+  id: string
+  areaId: string
+  areaName: string
+  name: string
+  version: string
+  description?: string
+  hash: string
+  // "area" = the owning area's members; "company" = everyone in the owning
+  // area's organization.
+  visibility: "area" | "company"
+  revision: number
+  fileCount: number
+  byteSize: number
+  uri: string
+  httpsUrl: string
+  updatedAt: number
+}
+
+export type SharedSkillBundle = Omit<SharedSkillSummary, "fileCount" | "byteSize"> & {
+  files: Array<{ path: string; content: string; sha256: string }>
+}

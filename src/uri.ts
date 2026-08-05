@@ -5,7 +5,7 @@ const ID_PATTERN = /^[A-Za-z0-9_-]{2,128}$/
 export type BrainResource = {
   version: 1
   areaId: string
-  resourceType: "area" | "note" | "source"
+  resourceType: "area" | "note" | "source" | "skill"
   resourceId?: string
 }
 
@@ -28,7 +28,7 @@ function parseSegments(pathname: string): Omit<BrainResource, "version"> {
   if (segments.length !== 3) throw new Error("Unsupported brain URI form")
   const areaId = assertId(segments[0], "area ID")
   const resourceType = segments[1]
-  if (resourceType !== "note" && resourceType !== "source") {
+  if (resourceType !== "note" && resourceType !== "source" && resourceType !== "skill") {
     throw new Error("Unsupported brain resource type")
   }
   return {

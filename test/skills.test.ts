@@ -2,7 +2,7 @@ import { mkdtempSync, readFileSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { describe, expect, it } from "vitest"
-import { validateSkillBundle, writeSkillBundle } from "../src/skills.js"
+import { readInstalledSkill, validateSkillBundle, writeSkillBundle } from "../src/skills.js"
 
 const bundle = {
   name: "dayofweek-brain",
@@ -33,5 +33,27 @@ describe("managed skill bundles", () => {
     expect(readFileSync(skillPath, "utf8")).toBe("customer instructions\n")
     expect(first.conflicts).toEqual(["SKILL.md.new"])
     expect(second.conflicts).toEqual(["SKILL.md.new.1"])
+  })
+
+  it("records a shared origin in the install manifest and reads it back", () => {
+    const directory = mkdtempSync(join(tmpdir(), "dcli-skill-"))
+    const origin = {
+      source: "shared" as const,
+      skillId: "sk123",
+      areaId: "area123",
+      uri: "dayofweek://brain/area123/skill/sk123",
+    }
+    writeSkillBundle(bundle, directory, origin)
+
+    const installed = readInstalledSkill(directory)
+    expect(installed).toMatchObject({ name: bundle.name, version: bundle.version, origin })
+    expect(installed?.hash).toMatch(/^[a-f0-9]{64}$/)
+  })
+
+  it("omits origin for platform installs and tolerates a missing manifest", () => {
+    const directory = mkdtempSync(join(tmpdir(), "dcli-skill-"))
+    writeSkillBundle(bundle, directory)
+    expect(readInstalledSkill(directory)?.origin).toBeUndefined()
+    expect(readInstalledSkill(join(directory, "nope"))).toBeNull()
   })
 })

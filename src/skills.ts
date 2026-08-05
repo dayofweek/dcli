@@ -9,6 +9,37 @@ export type SkillBundle = {
   files: Array<{ path: string; content: string; sha256?: string }>
 }
 
+/**
+ * Where an installed skill came from — recorded in `.dayofweek-skill.json` so
+ * `skill update` and `skill status --check` can go back to the same origin.
+ * "platform" = a named bundle from the built-in endpoint; "shared" = a skill
+ * another user published into a shared knowledge area.
+ */
+export type SkillOrigin =
+  | { source: "platform" }
+  | { source: "shared"; skillId: string; areaId: string; uri: string }
+
+export type InstalledSkillMetadata = {
+  name: string
+  version: string
+  hash: string
+  files: Record<string, string>
+  origin?: SkillOrigin
+}
+
+/** Parse `<dir>/.dayofweek-skill.json`; null when absent or malformed. */
+export function readInstalledSkill(targetDir: string): InstalledSkillMetadata | null {
+  const metadataPath = join(targetDir, ".dayofweek-skill.json")
+  if (!existsSync(metadataPath)) return null
+  try {
+    const parsed = JSON.parse(readFileSync(metadataPath, "utf8")) as InstalledSkillMetadata
+    if (typeof parsed.name !== "string" || typeof parsed.version !== "string") return null
+    return parsed
+  } catch {
+    return null
+  }
+}
+
 function sha256(value: string | Buffer): string {
   return createHash("sha256").update(value).digest("hex")
 }
@@ -45,6 +76,7 @@ export function validateSkillBundle(bundle: SkillBundle): SkillBundle {
 export function writeSkillBundle(
   input: SkillBundle,
   targetDir: string,
+  origin?: SkillOrigin,
 ): { written: number; unchanged: number; conflicts: string[] } {
   const bundle = validateSkillBundle(input)
   let filesWritten = 0
@@ -83,6 +115,14 @@ export function writeSkillBundle(
     filesWritten++
   }
   mkdirSync(targetDir, { recursive: true })
-  writeFileSync(metadataPath, JSON.stringify({ name: bundle.name, version: bundle.version, hash: bundle.hash, files: hashes }, null, 2), "utf8")
+  writeFileSync(
+    metadataPath,
+    JSON.stringify(
+      { name: bundle.name, version: bundle.version, hash: bundle.hash, files: hashes, ...(origin ? { origin } : {}) },
+      null,
+      2,
+    ),
+    "utf8",
+  )
   return { written: filesWritten, unchanged, conflicts }
 }

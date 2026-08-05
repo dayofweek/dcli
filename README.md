@@ -72,6 +72,34 @@ Updates overwrite only files whose installed hash still matches the managed mani
 
 The legacy entity/proposal Agent Skill remains available through `dcli skill install` without a bundle name.
 
+### Shared skills
+
+Beyond the named bundles above, users can publish their own skills into a shared knowledge area. Anyone who can read the area — or, with `--visibility company`, anyone in the publishing area's organization — can then discover, install, and update the skill:
+
+```bash
+# Publish a local skill directory (name/version come from SKILL.md frontmatter)
+dcli skill publish --area <areaId> --dir .agents/skills/meeting-notes --visibility company
+
+# Discover: shared skills appear in the same listing as the named bundles
+dcli skill list --json
+
+# Install by canonical URI, or by name + area
+dcli skill install 'dayofweek://brain/<areaId>/skill/<skillId>'
+dcli skill install meeting-notes --area <areaId>
+
+# Update goes back to wherever the install came from
+dcli skill update meeting-notes --area <areaId>
+dcli skill update --dir .agents/skills/meeting-notes
+
+# Check for newer versions without writing anything
+dcli skill status meeting-notes --dir .agents/skills/meeting-notes --check
+
+# Retire a shared skill you own
+dcli skill archive 'dayofweek://brain/<areaId>/skill/<skillId>'
+```
+
+Shared skills go through the same integrity pipeline as named bundles: per-file SHA-256 plus a manifest hash computed server-side and re-verified locally before anything touches disk, the same path-safety rules, and the same conflict handling — locally edited files are never overwritten. The install origin is recorded in `.dayofweek-skill.json`, so `skill update` and `skill status --check` know whether to ask the bundle endpoint or the shared-skill endpoint. Publishing requires write access to the area; `--visibility company` and `skill archive` require ownership.
+
 ## URI contract
 
 `dcli` accepts only exact canonical resource forms:
