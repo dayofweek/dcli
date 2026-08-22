@@ -423,6 +423,26 @@ export class DayOfWeekClient {
     return this.get(`/brain/sources?area=${encodeURIComponent(areaId)}`)
   }
 
+  /** An area's actors (people and organizations, the Actors tab). Active only. */
+  async listBrainActors(areaId: string): Promise<any> {
+    return this.get(`/brain/actors?area=${encodeURIComponent(areaId)}`)
+  }
+
+  /**
+   * Create an actor in an area. Idempotent on (area, name): an existing active
+   * actor comes back with `created: false` instead of a duplicate, so imports
+   * can re-run safely.
+   */
+  async createBrainActor(input: {
+    areaId: string
+    name: string
+    kind: "person" | "organization"
+    role?: string
+    description?: string
+  }): Promise<any> {
+    return this.post("/brain/actors", input)
+  }
+
   /** Entities with an active customer role and no investor/partner/producer role. */
   async adminCustomersOnly(): Promise<any> {
     return this.get("/admin/customers-only")
