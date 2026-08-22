@@ -280,9 +280,31 @@ brainSource
   .option("--mime <mimeType>", "MIME type; inferred from extension when omitted")
   .option("--meeting", "Mark this source as a recorded meeting")
   .option("--consent-ack", "Confirm recorded participants were informed and consented")
-  .action(async (opts: { area: string; file: string; mime?: string; meeting?: boolean; consentAck?: boolean }) => {
+  .option("--as-source", "Store an HTML document as a raw source instead of publishing it as a Page")
+  .action(async (opts: { area: string; file: string; mime?: string; meeting?: boolean; consentAck?: boolean; asSource?: boolean }) => {
     if (opts.meeting && !opts.consentAck) {
       throw new Error("--consent-ack is required: you are attesting that recorded participants were informed and consented")
+    }
+    // A full HTML document is almost always meant to be a Page (the Pages tab),
+    // which is published as a note via `brain share` — not stored as a raw
+    // source. Uploading it here would land it in Sources, where nobody looks
+    // for a page. Refuse unless the caller explicitly wants a raw source.
+    if (!opts.asSource) {
+      const looksHtmlName = /\.html?$/i.test(opts.file)
+      let looksHtmlContent = false
+      try {
+        const head = readFileSync(opts.file, "utf8").slice(0, 512)
+        looksHtmlContent = /^\s*(<!doctype html|<html[\s>])/i.test(head)
+      } catch {
+        // Unreadable as text (binary) — not an HTML page.
+      }
+      if (looksHtmlName || looksHtmlContent) {
+        throw new Error(
+          "This looks like a Page (a full HTML document). Pages live in the area's Pages tab and are published with:\n" +
+          "  dcli brain share --area <areaId> --title \"…\" --file " + opts.file + "\n" +
+          "Pass --as-source only if you really want the raw HTML stored as a source file.",
+        )
+      }
     }
     output(await getClient().uploadBrainSource({
       areaId: opts.area,
