@@ -443,6 +443,59 @@ export class DayOfWeekClient {
     return this.post("/brain/actors", input)
   }
 
+  /** The interview matrix: guide questions × active actors with answer cells. */
+  async getBrainActorMatrix(areaId: string): Promise<any> {
+    return this.get(`/brain/actors/matrix?area=${encodeURIComponent(areaId)}`)
+  }
+
+  /** Trigger the platform's answer extraction (one actor, or all active). */
+  async extractBrainActorAnswers(input: { areaId: string; actorId?: string }): Promise<any> {
+    return this.post("/brain/actors/extract", input)
+  }
+
+  /**
+   * Write one interview-matrix cell directly. The cell is marked
+   * capturedVia "dcli" and the platform's extraction never overwrites it.
+   */
+  async setBrainActorAnswer(input: {
+    actorId: string
+    questionId: string
+    answer: string
+    status?: "answered" | "partial" | "unknown"
+  }): Promise<any> {
+    return this.post("/brain/actors/answers", input)
+  }
+
+  /** Readiness scores: dimensions × active actors with full cells. */
+  async getBrainActorScores(areaId: string): Promise<any> {
+    return this.get(`/brain/actors/scores?area=${encodeURIComponent(areaId)}`)
+  }
+
+  /** Trigger the platform's readiness scoring (one actor, or all active). */
+  async scoreBrainActors(input: { areaId: string; actorId?: string }): Promise<any> {
+    return this.post("/brain/actors/score", input)
+  }
+
+  /**
+   * Write one readiness band directly (rationale required). The row is marked
+   * capturedVia "dcli" and the platform's scoring never overwrites it.
+   */
+  async setBrainActorScore(input: {
+    actorId: string
+    dimensionKey: string
+    band: "red" | "orange" | "green"
+    score?: number
+    rationale: string
+    gaps?: string[]
+  }): Promise<any> {
+    return this.post("/brain/actors/scores", input)
+  }
+
+  /** Scope a source to an actor (actorId null returns it to area level). */
+  async scopeBrainSource(sourceId: string, actorId: string | null): Promise<any> {
+    return this.patch(`/brain/sources/${encodeURIComponent(sourceId)}/actor`, { actorId })
+  }
+
   /** Entities with an active customer role and no investor/partner/producer role. */
   async adminCustomersOnly(): Promise<any> {
     return this.get("/admin/customers-only")

@@ -1,6 +1,6 @@
 {
   "name": "@dayofweek/dcli",
-  "version": "1.8.0",
+  "version": "1.9.0",
   "description": "CLI for the Day of Week AgTech platform \u2014 read data and submit proposals for review",
   "license": "MIT",
   "type": "module",

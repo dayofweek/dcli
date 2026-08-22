@@ -344,6 +344,94 @@ brainActors
     }))
   })
 
+brainActors
+  .command("matrix")
+  .description("The interview matrix: guide questions × active actors")
+  .requiredOption("--area <areaId>", "Area id (from `brain list`)")
+  .action(async (opts: { area: string }) => {
+    output(await getClient().getBrainActorMatrix(opts.area))
+  })
+
+brainActors
+  .command("extract")
+  .description("Trigger the platform's answer extraction (all active actors, or one)")
+  .requiredOption("--area <areaId>", "Area id (from `brain list`)")
+  .option("--actor <actorId>", "Only this actor")
+  .action(async (opts: { area: string; actor?: string }) => {
+    output(await getClient().extractBrainActorAnswers({ areaId: opts.area, actorId: opts.actor }))
+  })
+
+brainActors
+  .command("answer")
+  .description("Write one interview-matrix cell directly (marked capturedVia dcli, authoritative)")
+  .requiredOption("--actor <actorId>", "Actor id (from `brain actors list`)")
+  .requiredOption("--question <questionId>", "Question id (from `brain actors matrix`)")
+  .requiredOption("--answer <text>", "The answer; cite the source material in the text")
+  .option("--status <status>", "answered | partial | unknown", "answered")
+  .action(async (opts: { actor: string; question: string; answer: string; status: string }) => {
+    if (!["answered", "partial", "unknown"].includes(opts.status)) {
+      throw new Error(`--status must be answered, partial or unknown, got "${opts.status}"`)
+    }
+    output(await getClient().setBrainActorAnswer({
+      actorId: opts.actor,
+      questionId: opts.question,
+      answer: opts.answer,
+      status: opts.status as "answered" | "partial" | "unknown",
+    }))
+  })
+
+brainActors
+  .command("scores")
+  .description("Readiness scores: dimensions × active actors with full cells")
+  .requiredOption("--area <areaId>", "Area id (from `brain list`)")
+  .action(async (opts: { area: string }) => {
+    output(await getClient().getBrainActorScores(opts.area))
+  })
+
+brainActors
+  .command("score")
+  .description("Trigger the platform's readiness scoring (all active actors, or one)")
+  .requiredOption("--area <areaId>", "Area id (from `brain list`)")
+  .option("--actor <actorId>", "Only this actor")
+  .action(async (opts: { area: string; actor?: string }) => {
+    output(await getClient().scoreBrainActors({ areaId: opts.area, actorId: opts.actor }))
+  })
+
+brainActors
+  .command("set-score")
+  .description("Write one readiness band directly (marked capturedVia dcli, authoritative)")
+  .requiredOption("--actor <actorId>", "Actor id (from `brain actors list`)")
+  .requiredOption("--dimension <key>", "Dimension key (from `brain actors scores`)")
+  .requiredOption("--band <band>", "red | orange | green")
+  .requiredOption("--rationale <text>", "Grounds for the band — required")
+  .option("--score <number>", "0..1 numeric backing (default derived from band)", parseFloat)
+  .option("--gaps <items...>", "Identified gaps")
+  .action(async (opts: { actor: string; dimension: string; band: string; rationale: string; score?: number; gaps?: string[] }) => {
+    if (!["red", "orange", "green"].includes(opts.band)) {
+      throw new Error(`--band must be red, orange or green, got "${opts.band}"`)
+    }
+    output(await getClient().setBrainActorScore({
+      actorId: opts.actor,
+      dimensionKey: opts.dimension,
+      band: opts.band as "red" | "orange" | "green",
+      score: opts.score,
+      rationale: opts.rationale,
+      gaps: opts.gaps,
+    }))
+  })
+
+brainSource
+  .command("scope <sourceId>")
+  .description("Scope a source to an actor (feeds the readiness tables)")
+  .option("--actor <actorId>", "Actor id (from `brain actors list`)")
+  .option("--clear", "Return the source to area level")
+  .action(async (sourceId: string, opts: { actor?: string; clear?: boolean }) => {
+    if (Boolean(opts.actor) === Boolean(opts.clear)) {
+      throw new Error("Pass exactly one of --actor <actorId> or --clear")
+    }
+    output(await getClient().scopeBrainSource(sourceId, opts.actor ?? null))
+  })
+
 auth
   .command("devices")
   .description("List your agent tokens")
