@@ -311,6 +311,39 @@ brainSource
     }))
   })
 
+const brainActors = brain
+  .command("actors")
+  .description("Work with an area's actors (people and organizations)")
+
+brainActors
+  .command("list")
+  .description("List an area's actors (active, sorted by name)")
+  .requiredOption("--area <areaId>", "Area id (from `brain list`)")
+  .action(async (opts: { area: string }) => {
+    output(await getClient().listBrainActors(opts.area))
+  })
+
+brainActors
+  .command("add")
+  .description("Add an actor to an area (idempotent on name)")
+  .requiredOption("--area <areaId>", "Area id (from `brain list`)")
+  .requiredOption("--name <name>", "Actor name (person or organization)")
+  .option("--kind <kind>", "person | organization", "organization")
+  .option("--role <text>", "Role or relationship in the project")
+  .option("--description <text>", "Longer free-text description")
+  .action(async (opts: { area: string; name: string; kind: string; role?: string; description?: string }) => {
+    if (opts.kind !== "person" && opts.kind !== "organization") {
+      throw new Error(`--kind must be "person" or "organization", got "${opts.kind}"`)
+    }
+    output(await getClient().createBrainActor({
+      areaId: opts.area,
+      name: opts.name,
+      kind: opts.kind,
+      role: opts.role,
+      description: opts.description,
+    }))
+  })
+
 auth
   .command("devices")
   .description("List your agent tokens")
