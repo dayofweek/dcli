@@ -496,6 +496,48 @@ export class DayOfWeekClient {
     return this.patch(`/brain/sources/${encodeURIComponent(sourceId)}/actor`, { actorId })
   }
 
+  /** The area's tag vocabulary: predefined hierarchical set + user-defined. */
+  async listBrainTags(areaId: string): Promise<any> {
+    return this.get(`/brain/tags?area=${encodeURIComponent(areaId)}`)
+  }
+
+  /** Add a user-defined tag to an area's vocabulary. Idempotent on the key. */
+  async createBrainTag(input: {
+    areaId: string
+    label: string
+    parentKey?: string
+    description?: string
+  }): Promise<any> {
+    return this.post("/brain/tags", input)
+  }
+
+  /** Tag/actor couplings, filterable by actor, tag, source or note. */
+  async listBrainCouplings(input: {
+    areaId: string
+    tag?: string
+    actor?: string
+    source?: string
+    note?: string
+  }): Promise<any> {
+    const params = new URLSearchParams({ area: input.areaId })
+    if (input.tag) params.set("tag", input.tag)
+    if (input.actor) params.set("actor", input.actor)
+    if (input.source) params.set("source", input.source)
+    if (input.note) params.set("note", input.note)
+    return this.get(`/brain/tags/couplings?${params.toString()}`)
+  }
+
+  /** Couple (or uncouple, with remove) a source/note to a tag or an actor. */
+  async coupleBrainResource(input: {
+    sourceId?: string
+    noteId?: string
+    tagKey?: string
+    actorId?: string
+    remove?: boolean
+  }): Promise<any> {
+    return this.post("/brain/tags/couplings", input)
+  }
+
   /** Entities with an active customer role and no investor/partner/producer role. */
   async adminCustomersOnly(): Promise<any> {
     return this.get("/admin/customers-only")

@@ -454,6 +454,76 @@ brainSource
     output(await getClient().scopeBrainSource(sourceId, opts.actor ?? null))
   })
 
+const brainTags = brain
+  .command("tags")
+  .description("Work with an area's tag vocabulary and resource couplings")
+
+brainTags
+  .command("list")
+  .description("List an area's tags (predefined hierarchical set + user-defined)")
+  .requiredOption("--area <areaId>", "Area id (from `brain list`)")
+  .action(async (opts: { area: string }) => {
+    output(await getClient().listBrainTags(opts.area))
+  })
+
+brainTags
+  .command("add")
+  .description("Add a user-defined tag (idempotent on the derived key)")
+  .requiredOption("--area <areaId>", "Area id (from `brain list`)")
+  .requiredOption("--label <label>", "Tag label")
+  .option("--parent <key>", "Parent tag key (makes this a child tag)")
+  .option("--description <text>", "What the tag means")
+  .action(async (opts: { area: string; label: string; parent?: string; description?: string }) => {
+    output(await getClient().createBrainTag({
+      areaId: opts.area,
+      label: opts.label,
+      parentKey: opts.parent,
+      description: opts.description,
+    }))
+  })
+
+brainTags
+  .command("couplings")
+  .description("List tag/actor couplings — filter by actor, tag, source or note")
+  .requiredOption("--area <areaId>", "Area id (from `brain list`)")
+  .option("--tag <key>", "Resources coupled to this tag")
+  .option("--actor <actorId>", "Resources coupled to this actor")
+  .option("--source <sourceId>", "One source's tags and actors")
+  .option("--note <noteId>", "One note/page's tags and actors")
+  .action(async (opts: { area: string; tag?: string; actor?: string; source?: string; note?: string }) => {
+    output(await getClient().listBrainCouplings({
+      areaId: opts.area,
+      tag: opts.tag,
+      actor: opts.actor,
+      source: opts.source,
+      note: opts.note,
+    }))
+  })
+
+brainTags
+  .command("couple")
+  .description("Couple a source/note to a tag or an actor (--remove uncouples)")
+  .option("--source <sourceId>", "Source to couple")
+  .option("--note <noteId>", "Note/page to couple")
+  .option("--tag <key>", "Tag key (from `brain tags list`)")
+  .option("--actor <actorId>", "Actor id (from `brain actors list`)")
+  .option("--remove", "Remove the coupling instead of adding it")
+  .action(async (opts: { source?: string; note?: string; tag?: string; actor?: string; remove?: boolean }) => {
+    if (Boolean(opts.source) === Boolean(opts.note)) {
+      throw new Error("Pass exactly one of --source <sourceId> or --note <noteId>")
+    }
+    if (Boolean(opts.tag) === Boolean(opts.actor)) {
+      throw new Error("Pass exactly one of --tag <key> or --actor <actorId>")
+    }
+    output(await getClient().coupleBrainResource({
+      sourceId: opts.source,
+      noteId: opts.note,
+      tagKey: opts.tag,
+      actorId: opts.actor,
+      remove: opts.remove,
+    }))
+  })
+
 auth
   .command("devices")
   .description("List your agent tokens")
