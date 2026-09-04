@@ -102,6 +102,51 @@ describe("every documented workflow has a dcli command", () => {
   }, 60_000)
 })
 
+// A platform-wide count ("how many producers do we know of?") has to read two
+// registers — the entity hierarchy and the market intelligence register — and
+// walk every page of each. Both must be reachable from dcli, or the agent
+// falls back to curl; and the register must stay invisible to customers.
+describe("cross-org admin reads", () => {
+  it("pages the entity listing and filters it by type category and role", () => {
+    const entitiesHelp = helpAsAdmin(adminHome(), "admin", "entities")
+    for (const flag of ["--cursor", "--all", "--with-roles", "--role", "--category"]) {
+      expect(entitiesHelp).toContain(flag)
+    }
+  }, 60_000)
+
+  it("reaches the market intelligence register", () => {
+    const home = adminHome()
+    expect(helpAsAdmin(home, "admin")).toContain("market-intel")
+    const intelHelp = helpAsAdmin(home, "admin", "market-intel")
+    for (const command of ["list", "get", "stats"]) {
+      expect(intelHelp).toContain(command)
+    }
+    const listHelp = helpAsAdmin(home, "admin", "market-intel", "list")
+    for (const flag of ["--bbox", "--region", "--relationship", "--cursor", "--all"]) {
+      expect(listHelp).toContain(flag)
+    }
+  }, 60_000)
+
+  it("keeps the register off a non-admin's command surface", () => {
+    const home = mkdtempSync(join(tmpdir(), "dcli-plain-home-"))
+    expect(run(["--help"], { home })).not.toContain("market-intel")
+  }, 60_000)
+
+  it("lets an area's actors be linked to platform entities", () => {
+    expect(help("brain", "actors")).toContain("link")
+    expect(help("brain", "actors", "list")).toContain("--match")
+    const linkHelp = help("brain", "actors", "link")
+    expect(linkHelp).toContain("--entity")
+    expect(linkHelp).toContain("--unlink")
+  }, 60_000)
+
+  it("refuses to link without a target or --unlink", () => {
+    expect(() =>
+      run(["brain", "actors", "link", "--area", "area_1", "--actor", "actor_1"]),
+    ).toThrow(/--entity|--unlink/)
+  }, 60_000)
+})
+
 describe("dataset reads are server-discovered", () => {
   it("exposes generic data commands", () => {
     const rootHelp = help()

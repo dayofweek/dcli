@@ -33,6 +33,44 @@ export class ApiError extends Error {
   }
 }
 
+/**
+ * One page of a cursor-paged admin read. Filters apply within the scanned
+ * page, so `results` can be shorter than the page size — even empty — while
+ * `isDone` is still false. `nextCursor` is the only way forward.
+ */
+export type AdminPage<T = any> = {
+  results: T[]
+  total: number
+  scanned: number
+  isDone: boolean
+  nextCursor: string | null
+  truncated: boolean
+}
+
+/**
+ * Walk a cursor-paged admin read to the end and return every match as one
+ * page. This is the loop behind `--all`; without it every caller re-invents
+ * it, or reaches for a giant `--limit` and still misses rows.
+ */
+export async function collectAdminPages<T>(
+  fetchPage: (cursor?: string) => Promise<AdminPage<T>>,
+  startCursor?: string,
+): Promise<AdminPage<T> & { pages: number }> {
+  const results: T[] = []
+  let cursor = startCursor
+  let scanned = 0
+  let pages = 0
+  for (;;) {
+    const page = await fetchPage(cursor)
+    results.push(...page.results)
+    scanned += page.scanned ?? page.results.length
+    pages += 1
+    if (page.isDone || !page.nextCursor) break
+    cursor = page.nextCursor
+  }
+  return { results, total: results.length, scanned, isDone: true, nextCursor: null, truncated: false, pages }
+}
+
 export class DayOfWeekClient {
   private baseUrl: string
   private token: string
@@ -344,18 +382,69 @@ export class DayOfWeekClient {
   async adminListEntities(opts?: {
     org?: string
     type?: string
+    category?: string
+    role?: string
+    withRoles?: boolean
     missingLocation?: boolean
     search?: string
     limit?: number
-  }): Promise<{ results: any[]; truncated: boolean; total: number }> {
+    cursor?: string
+  }): Promise<AdminPage> {
     const params = new URLSearchParams()
     if (opts?.org) params.set("org", opts.org)
     if (opts?.type) params.set("type", opts.type)
+    if (opts?.category) params.set("category", opts.category)
+    if (opts?.role) params.set("role", opts.role)
+    if (opts?.withRoles) params.set("with-roles", "1")
     if (opts?.missingLocation) params.set("missing-location", "1")
     if (opts?.search) params.set("search", opts.search)
     if (opts?.limit) params.set("limit", String(opts.limit))
+    if (opts?.cursor) params.set("cursor", opts.cursor)
     const qs = params.toString()
     return this.get(`/admin/entities${qs ? `?${qs}` : ""}`)
+  }
+
+  // The market intelligence register: businesses recorded for research and
+  // prospecting, each with coordinates — a separate table from the entity
+  // hierarchy, so a platform-wide count has to read both.
+
+  async adminListMarketIntel(opts?: {
+    org?: string
+    type?: string
+    relationship?: string
+    priority?: string
+    stage?: string
+    region?: string
+    search?: string
+    bbox?: string
+    active?: boolean
+    limit?: number
+    cursor?: string
+  }): Promise<AdminPage> {
+    const params = new URLSearchParams()
+    if (opts?.org) params.set("org", opts.org)
+    if (opts?.type) params.set("type", opts.type)
+    if (opts?.relationship) params.set("relationship", opts.relationship)
+    if (opts?.priority) params.set("priority", opts.priority)
+    if (opts?.stage) params.set("stage", opts.stage)
+    if (opts?.region) params.set("region", opts.region)
+    if (opts?.search) params.set("search", opts.search)
+    if (opts?.bbox) params.set("bbox", opts.bbox)
+    if (opts?.active !== undefined) params.set("active", opts.active ? "1" : "0")
+    if (opts?.limit) params.set("limit", String(opts.limit))
+    if (opts?.cursor) params.set("cursor", opts.cursor)
+    const qs = params.toString()
+    return this.get(`/admin/market-intel${qs ? `?${qs}` : ""}`)
+  }
+
+  /** One register record in full, with its latest interactions. */
+  async adminGetMarketIntel(id: string): Promise<any> {
+    return this.get(`/admin/market-intel/${encodeURIComponent(id)}`)
+  }
+
+  /** Counts over the whole register — by type, relationship, priority, stage, region, country. */
+  async adminMarketIntelStats(org?: string): Promise<any> {
+    return this.get(`/admin/market-intel/stats${org ? `?org=${encodeURIComponent(org)}` : ""}`)
   }
 
   async adminListProposals(opts?: {
@@ -423,9 +512,20 @@ export class DayOfWeekClient {
     return this.get(`/brain/sources?area=${encodeURIComponent(areaId)}`)
   }
 
-  /** An area's actors (people and organizations, the Actors tab). Active only. */
-  async listBrainActors(areaId: string): Promise<any> {
-    return this.get(`/brain/actors?area=${encodeURIComponent(areaId)}`)
+  /**
+   * An area's actors (people and organizations, the Actors tab). Active only.
+   * With `match`, admins also get `candidates` on unlinked actors — the
+   * platform entities whose name matches — to review before linking.
+   */
+  async listBrainActors(areaId: string, opts?: { match?: boolean }): Promise<any> {
+    const params = new URLSearchParams({ area: areaId })
+    if (opts?.match) params.set("match", "1")
+    return this.get(`/brain/actors?${params.toString()}`)
+  }
+
+  /** Link an actor to the platform entity it is; `entityId: null` unlinks. */
+  async linkBrainActor(input: { areaId: string; actorId: string; entityId: string | null }): Promise<any> {
+    return this.post("/brain/actors/link", input)
   }
 
   /**
