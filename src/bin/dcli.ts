@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 
 import { Command } from "commander"
-import { ApiError, DayOfWeekClient, toArrayBuffer } from "../client.js"
+import { ApiError, DayOfWeekClient, toArrayBuffer, collectAdminPages } from "../client.js"
 import { getToken, getApiUrl, saveConfig, loadConfig, saveCredential, deleteCredential } from "../config.js"
 import { browserLogin } from "../auth/login.js"
 import { parseBrainResource } from "../uri.js"
@@ -341,8 +341,30 @@ brainActors
   .command("list")
   .description("List an area's actors (active, sorted by name)")
   .requiredOption("--area <areaId>", "Area id (from `brain list`)")
-  .action(async (opts: { area: string }) => {
-    output(await getClient().listBrainActors(opts.area))
+  .option("--match", "Suggest matching platform entities for unlinked actors (admins)")
+  .action(async (opts: { area: string; match?: boolean }) => {
+    output(await getClient().listBrainActors(opts.area, { match: opts.match }))
+  })
+
+brainActors
+  .command("link")
+  .description("Link an actor to the platform entity it is (or --unlink)")
+  .requiredOption("--area <areaId>", "Area id (from `brain list`)")
+  .requiredOption("--actor <actorId>", "Actor id (from `brain actors list`)")
+  .option("--entity <entityId>", "Platform entity id (from `admin entities` or `read entities`)")
+  .option("--unlink", "Remove the current link")
+  .action(async (opts: { area: string; actor: string; entity?: string; unlink?: boolean }) => {
+    if (!opts.entity && !opts.unlink) {
+      throw new Error("Provide --entity <entityId> to link, or --unlink to remove the link")
+    }
+    if (opts.entity && opts.unlink) {
+      throw new Error("--entity and --unlink are mutually exclusive")
+    }
+    output(await getClient().linkBrainActor({
+      areaId: opts.area,
+      actorId: opts.actor,
+      entityId: opts.unlink ? null : opts.entity!,
+    }))
   })
 
 brainActors
@@ -1481,22 +1503,93 @@ function registerAdminCommands() {
 
   admin
     .command("entities")
-    .description("List entities across all orgs with admin filters")
-    .option("--type <entityType>", "Filter by entity type")
+    .description("List entities across all orgs with admin filters (cursor-paged)")
+    .option("--type <entityType>", "Filter by type name (farm, producer, restaurant, …)")
+    .option("--category <category>", "Filter by type category (supply, demand, partner, financial, …)")
+    .option("--role <role>", "Only entities holding an active role: customer, partner, investor, producer, market_intel")
+    .option("--with-roles", "Attach each entity's active roles")
     .option("--missing-location", "Only entities lacking metadata.places[].lat/lng")
     .option("--search <query>", "Substring match on name")
     .option("--org <slug>", "Restrict to a single org slug or ID")
-    .option("--limit <count>", "Max results (default 200)", parseInt)
+    .option("--limit <count>", "Rows scanned per page (default 200, max 2000)", parseInt)
+    .option("--cursor <cursor>", "Continue from a previous page's nextCursor")
+    .option("--all", "Walk every page and return all matches")
     .action(async (opts) => {
       const client = getClient()
-      const result = await client.adminListEntities({
-        org: opts.org,
-        type: opts.type,
-        missingLocation: opts.missingLocation,
-        search: opts.search,
-        limit: opts.limit,
-      })
-      output(result)
+      const fetchPage = (cursor?: string) =>
+        client.adminListEntities({
+          org: opts.org,
+          type: opts.type,
+          category: opts.category,
+          role: opts.role,
+          withRoles: opts.withRoles,
+          missingLocation: opts.missingLocation,
+          search: opts.search,
+          limit: opts.limit,
+          cursor,
+        })
+      output(opts.all ? await collectAdminPages(fetchPage, opts.cursor) : await fetchPage(opts.cursor))
+    })
+
+  // The market intelligence register is a separate table from the entity
+  // hierarchy: businesses recorded for research and prospecting, each with
+  // coordinates. A platform-wide "how many do we know of" reads both.
+
+  const marketIntel = admin
+    .command("market-intel")
+    .description("The market intelligence register — businesses recorded for research and prospecting")
+
+  marketIntel
+    .command("list")
+    .description("List register rows (cursor-paged, newest first)")
+    .option("--type <entityType>", "farm, restaurant, farm_shop, retail_store, distributor, processor, market, cooperative, supplier, customer, competitor, other")
+    .option("--relationship <type>", "prospect, active_customer, supplier, partner, competitor, market_research, other")
+    .option("--priority <priority>", "critical, high, medium, low, watching")
+    .option("--stage <stage>", "Opportunity stage (research, qualified_lead, negotiation, …)")
+    .option("--region <region>", "Exact match on region (case-insensitive)")
+    .option("--search <query>", "Substring match on name")
+    .option("--bbox <latMin,lngMin,latMax,lngMax>", "Only rows inside a lat/lng box")
+    .option("--active", "Only active rows")
+    .option("--inactive", "Only inactive rows")
+    .option("--org <slug>", "Restrict to the owning org")
+    .option("--limit <count>", "Rows scanned per page (default 200, max 2000)", parseInt)
+    .option("--cursor <cursor>", "Continue from a previous page's nextCursor")
+    .option("--all", "Walk every page and return all matches")
+    .action(async (opts) => {
+      if (opts.active && opts.inactive) {
+        throw new Error("--active and --inactive are mutually exclusive")
+      }
+      const client = getClient()
+      const fetchPage = (cursor?: string) =>
+        client.adminListMarketIntel({
+          org: opts.org,
+          type: opts.type,
+          relationship: opts.relationship,
+          priority: opts.priority,
+          stage: opts.stage,
+          region: opts.region,
+          search: opts.search,
+          bbox: opts.bbox,
+          active: opts.active ? true : opts.inactive ? false : undefined,
+          limit: opts.limit,
+          cursor,
+        })
+      output(opts.all ? await collectAdminPages(fetchPage, opts.cursor) : await fetchPage(opts.cursor))
+    })
+
+  marketIntel
+    .command("get <id>")
+    .description("One register record with its latest interactions")
+    .action(async (id: string) => {
+      output(await getClient().adminGetMarketIntel(id))
+    })
+
+  marketIntel
+    .command("stats")
+    .description("Counts by type, relationship, priority, stage, region and country")
+    .option("--org <slug>", "Restrict to the owning org")
+    .action(async (opts) => {
+      output(await getClient().adminMarketIntelStats(opts.org))
     })
 
   admin

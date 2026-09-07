@@ -188,6 +188,38 @@ customer is irreversible and outward-facing, so it cannot happen as a side
 effect of reading the inbox — a person approves the exact text first, and
 `--approved` records that they did.
 
+## Cross-org reads (staff)
+
+Admin tokens can read across every organization. Both listings are
+cursor-paged: filters apply within each scanned page, so a page can be short
+or empty while more rows remain — `--all` walks the pages for you.
+
+```bash
+dcli admin entities --category supply --all --json      # every producer, every org
+dcli admin entities --role producer --with-roles --json  # first page, roles attached
+dcli admin entities --search huseby --json
+dcli admin entities --limit 500 --cursor <nextCursor> --json
+
+dcli admin market-intel stats --json                     # the market intelligence register, counted
+dcli admin market-intel list --type farm --region Agder --all --json
+dcli admin market-intel list --bbox 57.95,6.35,59.70,9.40 --json
+dcli admin market-intel get <id> --json
+```
+
+Entity rows carry `typeName` and `typeCategory` resolved from the entity's
+type — count on those, not on the legacy `entityType` string. The market
+intelligence register is a separate table from the entity hierarchy (every row
+has coordinates; `linkedEntity` names the hierarchy entity it points at, if
+any), so "how many producers do we know of" reads both.
+
+An area's actors can be tied to the platform entity they are:
+
+```bash
+dcli brain actors list --area <areaId> --match --json    # unlinked actors get name-matched candidates (admins)
+dcli brain actors link --area <areaId> --actor <actorId> --entity <entityId>
+dcli brain actors link --area <areaId> --actor <actorId> --unlink
+```
+
 ## Legacy platform commands
 
 Existing read/proposal workflows remain compatible:
