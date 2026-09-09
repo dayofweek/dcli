@@ -912,6 +912,80 @@ export class DayOfWeekClient {
     return this.delete(`/brain/skills/${encodeURIComponent(skillId)}`)
   }
 
+  // ── Time tracking ─────────────────────────────────────────────────────────
+  //
+  // Hours registered against time projects. Every rule (periods, frames,
+  // self-financing, the reportable basis, who may approve) is evaluated by
+  // the server; the client only carries JSON and prints what comes back.
+
+  async listTimeProjects(org?: string): Promise<{ projects: any[] }> {
+    const qs = org ? `?org=${encodeURIComponent(org)}` : ""
+    return this.get(`/time/projects${qs}`)
+  }
+
+  async getTimeProject(projectId: string, org?: string): Promise<any> {
+    const params = new URLSearchParams({ id: projectId })
+    if (org) params.set("org", org)
+    return this.get(`/time/projects?${params.toString()}`)
+  }
+
+  async upsertTimeProject(payload: Record<string, unknown>, org?: string): Promise<{ projectId: string }> {
+    const qs = org ? `?org=${encodeURIComponent(org)}` : ""
+    return this.post(`/time/projects${qs}`, payload)
+  }
+
+  async listTimeEntries(opts?: {
+    project?: string
+    user?: string
+    from?: string
+    to?: string
+    status?: string
+    org?: string
+  }): Promise<{ total: number; rows: any[] }> {
+    const params = new URLSearchParams()
+    if (opts?.project) params.set("project", opts.project)
+    if (opts?.user) params.set("user", opts.user)
+    if (opts?.from) params.set("from", opts.from)
+    if (opts?.to) params.set("to", opts.to)
+    if (opts?.status) params.set("status", opts.status)
+    if (opts?.org) params.set("org", opts.org)
+    const qs = params.toString()
+    return this.get(`/time/entries${qs ? `?${qs}` : ""}`)
+  }
+
+  async importTimeEntries(input: {
+    projectId: string
+    entries: unknown[]
+    dryRun: boolean
+    org?: string
+  }): Promise<any> {
+    const qs = input.org ? `?org=${encodeURIComponent(input.org)}` : ""
+    return this.post(`/time/entries${qs}`, {
+      projectId: input.projectId,
+      dryRun: input.dryRun,
+      entries: input.entries,
+    })
+  }
+
+  async listPendingTimeMonths(org?: string): Promise<{ approvals: any[] }> {
+    const qs = org ? `?org=${encodeURIComponent(org)}` : ""
+    return this.get(`/time/months${qs}`)
+  }
+
+  async actOnTimeMonth(input: {
+    projectId: string
+    month: string
+    action: "submit" | "approve" | "return" | "reopen"
+    userId?: string
+    userEmail?: string
+    comment?: string
+    org?: string
+  }): Promise<any> {
+    const { org, ...body } = input
+    const qs = org ? `?org=${encodeURIComponent(org)}` : ""
+    return this.post(`/time/months${qs}`, body)
+  }
+
   // ── Schema ────────────────────────────────────────────────────────────────
 
   async getSchema(): Promise<any> {
