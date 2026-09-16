@@ -1482,6 +1482,147 @@ feedback
     }))
   })
 
+// ── Time tracking ────────────────────────────────────────────────────────────
+//
+// Hours per project. The server owns the rules (project and participation
+// periods, hour frames, self-financing, the reportable basis, approvals);
+// this group parses flags, reads JSON files and prints the response. The
+// only local rule is the irreversibility gate on import: real rows are
+// written, so --dry-run first, then --approved.
+
+const time = program.command("time").description("Hours per project: projects, entries, monthly sheets")
+
+const timeProjects = time.command("projects").description("Time projects: setup and overview")
+
+timeProjects
+  .command("list")
+  .description("List time projects with totals and frame usage")
+  .option("--org <org>", "Organization slug or id (admin only)")
+  .action(async (opts) => {
+    output(await getClient().listTimeProjects(opts.org))
+  })
+
+timeProjects
+  .command("show <projectId>")
+  .description("One project: setup, person×activity×month matrix, entries with computed split, monthly sheets")
+  .option("--org <org>", "Organization slug or id (admin only)")
+  .action(async (projectId: string, opts) => {
+    output(await getClient().getTimeProject(projectId, opts.org))
+  })
+
+timeProjects
+  .command("upsert")
+  .description("Create or update a time project from a JSON file (include projectId to update)")
+  .requiredOption("--file <path>", "JSON payload with the project setup (- for stdin)")
+  .option("--org <org>", "Organization slug or id (admin only)")
+  .action(async (opts) => {
+    const raw = opts.file === "-" ? readFileSync(0, "utf8") : readFileSync(opts.file, "utf8")
+    const payload = JSON.parse(raw)
+    if (!payload || typeof payload !== "object" || Array.isArray(payload)) {
+      throw new Error("Payload must be a JSON object with the project setup")
+    }
+    output(await getClient().upsertTimeProject(payload, opts.org))
+  })
+
+const timeEntries = time.command("entries").description("Registered hours")
+
+timeEntries
+  .command("list")
+  .description("Flat rows with the computed split (counted, self-financed, reportable, reasons)")
+  .option("--project <projectId>", "Only this project")
+  .option("--user <userId>", "Only this person (owners and admins)")
+  .option("--from <YYYY-MM-DD>", "First work date")
+  .option("--to <YYYY-MM-DD>", "Last work date")
+  .option("--status <status>", "draft | submitted | approved")
+  .option("--org <org>", "Organization slug or id (admin only)")
+  .action(async (opts) => {
+    output(
+      await getClient().listTimeEntries({
+        project: opts.project,
+        user: opts.user,
+        from: opts.from,
+        to: opts.to,
+        status: opts.status,
+        org: opts.org,
+      }),
+    )
+  })
+
+timeEntries
+  .command("import")
+  .description("Idempotent batch import of hours into one project. Requires --dry-run or --approved")
+  .requiredOption("--project <projectId>", "Target time project")
+  .requiredOption("--file <path>", "JSON: { entries: [...] } or a bare array (- for stdin)")
+  .option("--dry-run", "Validate and report what would happen, write nothing")
+  .option("--approved", "The operator approved the dry-run result")
+  .option("--org <org>", "Organization slug or id (admin only)")
+  .action(async (opts) => {
+    if (!opts.dryRun && !opts.approved) {
+      throw new Error(
+        "Refusing to write: run with --dry-run first, show the operator the summary, " +
+          "then repeat with --approved. This writes real hours, not proposals.",
+      )
+    }
+    const raw = opts.file === "-" ? readFileSync(0, "utf8") : readFileSync(opts.file, "utf8")
+    const payload = JSON.parse(raw)
+    const entries = Array.isArray(payload) ? payload : payload?.entries
+    if (!Array.isArray(entries) || entries.length === 0) {
+      throw new Error("Payload needs { entries: [...] } with at least one entry")
+    }
+    output(
+      await getClient().importTimeEntries({
+        projectId: opts.project,
+        entries,
+        dryRun: Boolean(opts.dryRun),
+        org: opts.org,
+      }),
+    )
+  })
+
+const timeMonths = time.command("months").description("Monthly sheets: submit, approve, return, reopen")
+
+timeMonths
+  .command("list")
+  .description("Months waiting for your approval (project owner), or every submitted month (admin)")
+  .option("--org <org>", "Organization slug or id (admin only)")
+  .action(async (opts) => {
+    output(await getClient().listPendingTimeMonths(opts.org))
+  })
+
+for (const action of ["submit", "approve", "return", "reopen"] as const) {
+  const descriptions = {
+    submit: "Submit a month for approval (your own; admins may pass --user-email)",
+    approve: "Approve a submitted month — locks its rows (project owner or admin)",
+    return: "Return a submitted month as drafts, --comment required (project owner or admin)",
+    reopen: "Reopen an approved month for correction; it needs a new approval",
+  }
+  timeMonths
+    .command(action)
+    .description(descriptions[action])
+    .requiredOption("--project <projectId>", "Time project")
+    .requiredOption("--month <YYYY-MM>", "Month")
+    .option("--user-email <email>", "Whose month (defaults to yourself)")
+    .option("--user <userId>", "Whose month, by user id")
+    .option("--comment <text>", "Comment (required for return)")
+    .option("--org <org>", "Organization slug or id (admin only)")
+    .action(async (opts) => {
+      if (action === "return" && !opts.comment) {
+        throw new Error("--comment is required when returning a month")
+      }
+      output(
+        await getClient().actOnTimeMonth({
+          projectId: opts.project,
+          month: opts.month,
+          action,
+          userId: opts.user,
+          userEmail: opts.userEmail,
+          comment: opts.comment,
+          org: opts.org,
+        }),
+      )
+    })
+}
+
 // ── Admin Commands ───────────────────────────────────────────────────────────
 //
 // These are admin-only. They're registered as hidden subcommands when the

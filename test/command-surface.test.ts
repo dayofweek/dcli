@@ -171,6 +171,36 @@ describe("dataset reads are server-discovered", () => {
   })
 })
 
+describe("time tracking", () => {
+  it("exposes projects, entries and monthly sheets", () => {
+    expect(help()).toContain("time")
+    const timeHelp = help("time")
+    for (const group of ["projects", "entries", "months"]) {
+      expect(timeHelp).toContain(group)
+    }
+    expect(help("time", "projects")).toContain("upsert")
+    expect(help("time", "entries")).toContain("import")
+    const months = help("time", "months")
+    for (const action of ["submit", "approve", "return", "reopen"]) {
+      expect(months).toContain(action)
+    }
+  }, 60_000)
+
+  // Importing hours writes real rows. The gate mirrors produce import: the
+  // agent must rehearse, show the operator the summary, then repeat approved.
+  it("refuses to import hours without --dry-run or --approved", () => {
+    expect(() =>
+      run(["time", "entries", "import", "--project", "p1", "--file", "entries.json"]),
+    ).toThrow(/Refusing to write/)
+  }, 60_000)
+
+  it("requires a comment when returning a month", () => {
+    expect(() =>
+      run(["time", "months", "return", "--project", "p1", "--month", "2026-08"]),
+    ).toThrow(/--comment is required/)
+  }, 60_000)
+})
+
 // Sending mail to a customer is irreversible and outward-facing. Reading a
 // thread must never be able to send one as a side effect, so the send paths
 // refuse without an explicit approval flag — the mechanical backstop behind

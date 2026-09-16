@@ -153,6 +153,35 @@ dcli data get <dataset> --limit 100 --json
 Responses are `{ dataset, total, truncated, rows }`. The CLI has no built-in
 dataset names; new datasets appear in the listing without a CLI update.
 
+## Time tracking (staff)
+
+Hours registered against time projects. The server owns every rule — project
+and participation periods, hour frames, self-financing, the reportable basis,
+who may approve — and the CLI only carries JSON.
+
+```bash
+dcli time projects list --json
+dcli time projects show <projectId> --json
+dcli time projects upsert --file project.json          # create, or update with projectId
+
+dcli time entries list --project <id> --from 2026-06-01 --to 2026-09-30 --json
+dcli time entries import --project <id> --file entries.json --dry-run
+dcli time entries import --project <id> --file entries.json --approved
+
+dcli time months list --json
+dcli time months submit --project <id> --month 2026-08
+dcli time months approve --project <id> --month 2026-08 --user-email someone@example.com
+dcli time months return --project <id> --month 2026-08 --user-email ... --comment "..."
+```
+
+`entries import` is idempotent: each entry carries an import key (explicit, or
+derived from person + date + activity + description), so re-running a file
+updates rather than duplicates. Approved rows are locked and reported as
+`skip_locked`; any invalid entry aborts the whole batch with nothing written.
+Because real rows are written, the command refuses to run without `--dry-run`
+first and `--approved` afterwards. Payload shapes are documented in the
+`time-tracking` reference that `dcli skill install` fetches for staff.
+
 ## Feedback backlog
 
 The customer feedback backlog that humans and coding agents work together.
